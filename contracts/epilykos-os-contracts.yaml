@@ -282,6 +282,7 @@ contracts:
   - 'Application repo: build workflows record the pushed multi-arch digest, commit and ref as an artifact and step summary
     (app commit fabfa89).'
   - 'OS repo: make contracts enforces provenance for every manifest in manifests/ against release/digest-records/.'
+  - 'Bridge: after each image build the application repository sends an app-image-published repository_dispatch carrying the digest records; .github/workflows/app-release-sync.yml applies them with tools/sync_app_release.py (strict payload validation), runs make contracts, and opens or updates one pull request per channel (app-sync/dev, app-sync/stable) against dev. Merging that pull request is the human trust decision; nothing is merged automatically.'
 - id: C-UPDATE-001
   title: OS update trust model
   stage: 5
@@ -758,3 +759,4 @@ changelog:
   - D-STORAGE-001 sizing inputs; T-RUNTIME-003 read-only-root test.
   - Contract state passed defined; the Markdown document is generated from this registry and make contracts fails if it is stale.
   - make contracts validates IDs, decision references, releasable stages, Quadlets and manifests; tools/test_validate_contracts.py proves each rule fails.
+  - App-to-OS bridge (C-RELEASE-001): repository_dispatch from the application image workflows, sync script with strict payload validation, one pull request per channel; tools/test_sync_app_release.py.

@@ -25,7 +25,16 @@ Both repositories use the same branch model:
 - **`dev`** — integration branch. Builds from `dev` may be used by developer images and the explicitly labelled `dev` channel only.
 - **`main`** — stable releases only, updated by merging `dev` after review. Stable appliance releases reference only application images built from `main` (`I-009`, `C-RELEASE-001`).
 
-Every application image build publishes a digest record (`service, image, digest, tag, commit, ref`). Stable manifests are assembled from `main` records; tags such as `latest` and `dev` are only ever used to discover a build, never to pin one.
+Every application image build publishes a digest record (`service, image, digest, tag, commit, ref, version`). Stable manifests are assembled from `main` records; tags such as `latest` and `dev` are only ever used to discover a build, never to pin one.
+
+**How the repositories stay in step.** The OS repository never tracks application source, only released images:
+
+1. A push to the application's `dev` or `main` builds the images and records their digests.
+2. The build then sends an `app-image-published` event to this repository with those records.
+3. `app-release-sync.yml` validates the records, stores them under `release/digest-records/`, writes the next `manifests/dev.yaml` or `manifests/stable.yaml` (sequence + 1), runs `make contracts`, and opens or updates the pull request `app-sync/dev` or `app-sync/stable` against `dev`.
+4. A maintainer checks and merges that pull request. **That merge is the trust decision for the release** (`C-UPDATE-004`); nothing reaches an appliance automatically. A stable OS release then carries the stable manifest from `dev` to `main`.
+
+In the other direction, when the OS needs an application change, §9 lists it, it lands in the application repository as a pull request into `dev`, and the contract cites the commit.
 
 ## 1. Normative language and contract states
 
@@ -325,6 +334,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 - Application repo: build workflows record the pushed multi-arch digest, commit and ref as an artifact and step summary (app commit fabfa89).
 - OS repo: make contracts enforces provenance for every manifest in manifests/ against release/digest-records/.
+- Bridge: after each image build the application repository sends an app-image-published repository_dispatch carrying the digest records; .github/workflows/app-release-sync.yml applies them with tools/sync_app_release.py (strict payload validation), runs make contracts, and opens or updates one pull request per channel (app-sync/dev, app-sync/stable) against dev. Merging that pull request is the human trust decision; nothing is merged automatically.
 
 **Required evidence**
 
@@ -821,3 +831,4 @@ The architecture is ready for implementation when all Stage 0 decisions are froz
 - D-STORAGE-001 sizing inputs; T-RUNTIME-003 read-only-root test.
 - Contract state passed defined; the Markdown document is generated from this registry and make contracts fails if it is stale.
 - make contracts validates IDs, decision references, releasable stages, Quadlets and manifests; tools/test_validate_contracts.py proves each rule fails.
+- {'App-to-OS bridge (C-RELEASE-001)': 'repository_dispatch from the application image workflows, sync script with strict payload validation, one pull request per channel; tools/test_sync_app_release.py.'}

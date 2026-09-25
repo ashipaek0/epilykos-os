@@ -1,12 +1,12 @@
 # EpilykosOS
 
-Appliance OS for [Epilykos](https://github.com/ashipaek0/epilykos) on the Raspberry Pi 5 — **Track 2** of the project. Track 1, the ordinary Docker Compose deployment, lives in the application repository and is not governed here (invariant `I-001`).
+Appliance OS for [Epilykos](https://github.com/ashipaek0/epilykos) on the Raspberry Pi — **Track 2** of the project. Tested on the **Raspberry Pi 3B**; Raspberry Pi 4 and 5 are best effort, built on proven upstream board support (see §0 of the contract). Track 1, the ordinary Docker Compose deployment, lives in the application repository and is not governed here (invariant `I-001`).
 
 This repository will hold the contracts, the OS image build, RAUC configuration, Quadlets and provisioning. It consumes the Epilykos application **only as OCI images pinned by digest**, never as source.
 
 ## Status
 
-Pre-Stage 0. The contracts are at **v0.4-draft**; nothing is built yet. Start with [`contracts/EPILYKOS-OS-CONTRACTS.md`](contracts/EPILYKOS-OS-CONTRACTS.md). The Stage 0 gate needs the boot-chain spike (`C-BOOT-000`) and the decisions due at Stage 0 (`D-PLATFORM-001`, `D-BOOT-002`, `D-RECOVERY-001`, `D-STORAGE-001`).
+Pre-Stage 0. The contracts are at **v0.5-draft**; nothing is built yet. Start with [`contracts/EPILYKOS-OS-CONTRACTS.md`](contracts/EPILYKOS-OS-CONTRACTS.md). The Stage 0 gate needs the boot-chain spike (`C-BOOT-000`) and the decisions due at Stage 0 (`D-PLATFORM-001`, `D-BOOT-002`, `D-RECOVERY-001`, `D-STORAGE-001`).
 
 ## Branches and releases
 

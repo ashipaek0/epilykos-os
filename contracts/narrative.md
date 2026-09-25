@@ -2,7 +2,7 @@
 
 **Version:** {{VERSION}}  
 **Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
-**Reference platform:** Raspberry Pi 5 (8 GB)  
+**Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
 **Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
 
 > This document converts the v0.5 narrative architecture into implementation contracts and acceptance gates. A contract marked **decision-required** or **blocked-on-spike** is deliberately not silently completed: CI must treat it as unresolved until the named decision/evidence exists.
@@ -33,6 +33,17 @@ Every application image build publishes a digest record (`service, image, digest
 4. A maintainer checks and merges that pull request. **That merge is the trust decision for the release** (`C-UPDATE-004`); nothing reaches an appliance automatically. A stable OS release then carries the stable manifest from `dev` to `main`.
 
 In the other direction, when the OS needs an application change, §9 lists it, it lands in the application repository as a pull request into `dev`, and the contract cites the commit.
+
+### Hardware support tiers
+
+| Tier | Boards | What it means |
+|---|---|---|
+| **1 — tested** | Raspberry Pi 3 Model B (1 GB) | The maintainer's board. Every release-gating hardware test runs here; all evidence in §10 comes from it. |
+| **2 — best effort** | Raspberry Pi 4, Raspberry Pi 5 | Images are built in CI from the same source. Board support (kernel, firmware, bootloader, device trees) comes only from a maintained upstream project pinned to a reviewed revision. Untested unless community evidence exists, and release notes say so. |
+
+Because of this (`C-HW-001`, `I-010`):
+- Features that only exist on Tier 2 hardware (USB gadget provisioning, the Pi 5 RTC, NVMe boot) are optional and never gate a stage.
+- The Tier 1 design constraints are 1 GB RAM (`C-RESOURCE-001`), a microSD boot medium (`C-BOOT-001`, `C-DATA-003`), no RTC (`C-TIME-001`), and Bluetooth sharing the main UART (`C-RUNTIME-003`).
 
 ## 1. Normative language and contract states
 
@@ -70,10 +81,10 @@ A stage is complete only when every test assigned to that stage passes and every
 
 | Stage | Gate |
 |---:|---|
-| 0 | The A/B boot chain and build system are proven on the reference Pi 5 and v1 medium (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
-| 1 | Ethernet, Wi-Fi AP and USB provisioning paths work from a clean flash without terminal access; provisioning captures the site time zone. |
-| 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; release channels and digest provenance are enforced. |
-| 3 | Serial/RS232/RS485 and BLE hardware tests pass; BMS bridge privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
+| 0 | Hardware tiers are recorded (`C-HW-001`); the A/B boot chain and build system are proven on the Tier 1 Pi 3B with a microSD card (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
+| 1 | Ethernet and Wi-Fi AP provisioning work on Tier 1 from a clean flash without terminal access; provisioning captures the site time zone; the clock survives an offline boot without an RTC; Tier 2 images build in CI. USB gadget provisioning is Tier 2 best effort. |
+| 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; the whole appliance fits the Tier 1 1 GB memory budget over a 72-hour soak; release channels and digest provenance are enforced. |
+| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; BMS bridge privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
 | 4 | Appliance policy is active: read-only root, persistent DATA, logging policy, SSH default-off/key lifecycle, U-Boot/RAUC bootchooser (or the mechanism chosen by `D-BOOT-002`), corrupted-environment recovery, power-cut telemetry-loss bound, and boot-health separation all pass hardware tests. |
 | 5 | Signed RAUC updates and trusted, replay-protected, digest-pinned, stable-channel OCI application updates both pass independent authenticity, success/failure, and rollback tests. |
 | 6 | Optional verified boot and user-specified update URL are implemented only if separately approved. |
@@ -84,7 +95,7 @@ The decision registry is **not** ordered by when a decision was introduced. It i
 
 Stage 0 must review the **entire** open decision backlog and confirm each decision's due stage. Only decisions due at Stage 0 have to be resolved before Stage 0 closes; later-stage decisions remain open but visible. A stage cannot close while an open decision whose `due_stage` is that stage or earlier remains unresolved.
 
-This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `D-UPDATE-001` (v0.2), and `D-PLATFORM-001`, `D-BOOT-002` and `D-RELEASE-001` (v0.4).
+This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `D-UPDATE-001` (v0.2), `D-PLATFORM-001`, `D-BOOT-002` and `D-RELEASE-001` (v0.4), and `D-HW-001` (resolved) and `D-RESOURCE-001` (v0.5).
 
 ## 7. Decisions that must not be guessed
 
@@ -113,7 +124,8 @@ That target MUST fail when:
 - an application candidate can be activated without satisfying `C-UPDATE-004` manifest trust;
 - an externally supplied application manifest with sequence at or below the stored promoted-release floor can be activated without an explicit authenticated downgrade exception;
 - appliance SSH is enabled by default or permits password/root login;
-- developer and appliance partition topologies diverge;
+- developer and appliance partition topologies diverge, or a Tier 2 image's partition topology diverges from Tier 1;
+- a Tier 2 image fails to build, or its board support is not pinned to a recorded upstream revision;
 - required appliance OCI images are not present in the image manifest/preload set.
 
 Checks whose inputs do not exist yet (Quadlets, manifests, image builds) run as soon as the corresponding directory appears. Hardware-dependent tests MUST emit machine-readable evidence rather than being silently skipped. A permitted skip must name the missing hardware capability and must not count as a pass for a release gate.
@@ -140,7 +152,7 @@ The conditional read-only-container-root requirement in `C-RUNTIME-002` is inten
 
 ## 10. Evidence directory convention
 
-Implementation evidence SHOULD be committed or uploaded under a stable structure:
+Implementation evidence SHOULD be committed or uploaded under a stable structure. Every evidence file MUST name the board (and revision) it was produced on; release-gating evidence comes from the Tier 1 board.
 
 ```text
 evidence/
@@ -155,6 +167,7 @@ evidence/
 │   ├── podman-info.json
 │   ├── offline-boot.json
 │   ├── readonly-root.json
+│   ├── memory-soak-72h.json
 │   └── release-provenance.json
 ├── stage-3/
 │   └── ble-privilege-spike.json

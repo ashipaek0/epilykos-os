@@ -1,0 +1,98 @@
+# Bridge from the application repository (C-RELEASE-001).
+#
+# ashipaek0/epilykos sends `app-image-published` after every image build on
+# its dev/main branches, carrying the digest records. This workflow applies
+# them to the `dev` branch of this repository and opens (or updates) one pull
+# request per channel. Nothing is merged automatically: merging the PR is the
+# human trust decision for that application release (C-UPDATE-004).
+#
+# repository_dispatch only runs workflows from the default branch (main), so
+# changes to this file take effect once they reach main.
+name: App release sync
+
+on:
+  repository_dispatch:
+    types: [app-image-published]
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: 'client_payload JSON ({"ref","commit","records":[...]}) — for testing or re-running a missed release'
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: app-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml==6.0.2
+
+      - name: Apply release payload
+        id: apply
+        env:
+          DISPATCH_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          MANUAL_PAYLOAD: ${{ github.event.inputs.payload }}
+        run: |
+          payload="${MANUAL_PAYLOAD:-$DISPATCH_PAYLOAD}"
+          summary="$(python3 tools/sync_app_release.py --payload "$payload")"
+          echo "$summary"
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          ref="$(printf '%s' "$payload" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ref"])')"
+          commit="$(printf '%s' "$payload" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')"
+          if [ "$ref" = "main" ]; then channel=stable; else channel=dev; fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "short=${commit:0:7}" >> "$GITHUB_OUTPUT"
+
+      # PRs opened with GITHUB_TOKEN do not trigger other workflows, so the
+      # contract checks run here, before anything is proposed.
+      - name: Validate contracts
+        run: make contracts
+
+      - name: Open or update pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ steps.apply.outputs.channel }}
+          SHORT: ${{ steps.apply.outputs.short }}
+          SUMMARY: ${{ steps.apply.outputs.summary }}
+        run: |
+          # --porcelain also lists untracked files: the first release creates
+          # manifests/ and release/ from scratch, which `git diff` ignores.
+          if [ -z "$(git status --porcelain -- manifests release)" ]; then
+            echo "No change (digests already recorded and pinned)."
+            exit 0
+          fi
+          branch="app-sync/${CHANNEL}"
+          git config user.name "epilykos-os bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add manifests release
+          git commit -m "app(${CHANNEL}): ${SUMMARY}"
+          git push --force origin "$branch"
+          body="Automated from ashipaek0/epilykos (${SHORT}).
+
+          ${SUMMARY}
+
+          - Digest records: \`release/digest-records/\`
+          - Manifest: \`manifests/${CHANNEL}.yaml\`
+          - \`make contracts\` passed in the sync run.
+
+          **Merging this PR is the trust decision for this application release** (C-UPDATE-004).
+          Check the digests match the application build before merging."
+          if gh pr view "$branch" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$branch" --title "App ${CHANNEL} release ${SHORT}" --body "$body"
+          else
+            gh pr create --base dev --head "$branch" --title "App ${CHANNEL} release ${SHORT}" --body "$body"
+          fi

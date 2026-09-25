@@ -1,0 +1,600 @@
+metadata:
+  document: EPILYKOS-OS-CONTRACTS
+  version: 0.3-freeze-candidate
+  architecture_baseline: EpilykosOS Appliance Architecture v0.5
+  reference_platform: Raspberry Pi 5 (8 GB)
+  tracks:
+    track_1: Existing Docker Compose deployment; outside this contract
+    track_2: EpilykosOS appliance; governed by this contract
+  normative_terms:
+    MUST: Required for the referenced stage gate to pass.
+    SHOULD: Expected unless an explicit, documented exception is approved.
+    MAY: Optional and non-blocking.
+frozen_invariants:
+- id: I-001
+  requirement: Track 1 and Track 2 remain separate deployment products.
+  verification: Repository documentation and release artifacts distinguish Docker Compose from EpilykosOS.
+- id: I-002
+  requirement: Developer and appliance EpilykosOS images use the same boot chain and partition topology.
+  verification: Partition-table and boot-artifact comparison test.
+- id: I-003
+  requirement: EpilykosOS and Epilykos application updates are independent rollback domains.
+  verification: Independent forced-failure rollback tests for RAUC and OCI planes.
+- id: I-004
+  requirement: The appliance boots and starts Epilykos with no Ethernet link, no configured Wi-Fi, and no Internet.
+  verification: Offline boot acceptance test.
+- id: I-005
+  requirement: Persistent user data is never stored only inside ROOT-A or ROOT-B.
+  verification: Filesystem scan plus A/B rollback persistence test.
+- id: I-006
+  requirement: Production appliance images MUST NOT use privileged=true for the BMS bridge unless a reviewed exception is
+    recorded.
+  verification: Static Quadlet scan and Stage 3 hardware test evidence.
+- id: I-007
+  requirement: 'Neither update plane may activate a candidate solely on unauthenticated metadata: OS bundles and application
+    manifests both require an explicit trust decision before activation.'
+  verification: RAUC signature-rejection tests plus application-manifest trust/rejection tests.
+- id: I-008
+  requirement: Externally supplied application manifests are replay-protected by a monotonic release sequence stored on DATA;
+    internal previous-known-good rollback remains independently available.
+  verification: Application-manifest replay rejection plus internal rollback tests.
+contracts:
+- id: C-BOOT-001
+  title: Partition map
+  stage: 0
+  status: decision-required
+  requirements:
+  - Both developer and appliance images MUST use GPT and the same ordered partition topology.
+  - Required labels are BOOT, ROOT-A, ROOT-B, DATA.
+  - RECOVERY is conditional and MUST NOT be added until D-RECOVERY-001 is resolved.
+  - ROOT-A and ROOT-B MUST be equal size.
+  - DATA MUST be a separate persistent filesystem and MUST survive OS slot switches and application rollbacks.
+  - Exact partition sizes are intentionally unresolved by architecture v0.5 and MUST be frozen before Stage 0 closes.
+  evidence:
+  - parted -s <image> unit B print
+  - blkid output from first boot
+  - CI assertion that developer/appliance partition tables are identical
+- id: C-BOOT-002
+  title: U-Boot / RAUC bootchooser variables
+  stage: 4
+  status: draft
+  requirements:
+  - Raspberry Pi firmware MUST boot U-Boot; U-Boot MUST select the boot slot before Linux starts.
+  - The bootchooser MUST use BOOT_ORDER and BOOT_<slot>_LEFT variables compatible with RAUC's U-Boot backend.
+  - RAUC in userspace MUST be the only normal runtime component that mutates slot-good/bad state.
+  - boot-attempts and boot-attempts-primary MUST be explicit configuration values; defaults are not acceptable.
+  - Loss or corruption of the U-Boot environment MUST have a documented deterministic recovery behavior.
+  evidence:
+  - U-Boot environment dump before/after install
+  - Forced boot-failure test showing attempt decrement
+  - RAUC status output matched to U-Boot environment
+  - Corrupt/lost U-Boot environment recovery test
+  unresolved:
+  - Exact boot-attempts value
+  - Exact boot-attempts-primary value
+  - U-Boot environment storage location and redundancy strategy
+- id: C-BOOT-003
+  title: Mark-good conditions
+  stage: 4
+  status: draft
+  requirements:
+  - A new OS slot MUST be marked good only after multi-user userspace is reached, required filesystems are mounted, Podman
+    is operational, and the Epilykos container is healthy.
+  - Network link, Internet reachability, BLE availability, inverter availability, and full SQLite integrity checks MUST NOT
+    gate mark-good.
+  - A lightweight database open/schema operation MAY be part of the Epilykos container health check only to demonstrate application
+    startup.
+  - Failure to satisfy boot health within the configured timeout MUST leave the slot unconfirmed; U-Boot attempt accounting
+    then determines rollback.
+  evidence:
+  - systemd dependency graph
+  - epilykos-health-gate.service test
+  - Test with Ethernet unplugged and Wi-Fi unconfigured still marks slot good
+  - Test with intentionally broken Epilykos startup does not mark slot good
+  unresolved:
+  - Exact health-gate timeout
+- id: C-DATA-001
+  title: Persistent DATA paths
+  stage: 0
+  status: draft
+  requirements:
+  - DATA MUST be the only authoritative persistent writable partition for application state.
+  - Epilykos application data MUST reside below /data/epilykos/.
+  - The current Epilykos database path ./data/energy.db MUST map to persistent DATA inside the container.
+  - Recommended host layout is /data/epilykos/app-data, /data/epilykos/snapshots, /data/epilykos/journal, /data/containers,
+    and /data/epilykos/update-state.
+  - OS rollback MUST NOT revert database, settings, or snapshots.
+  evidence:
+  - Mount table
+  - Container volume inspection
+  - Create data on ROOT-A, boot ROOT-B, verify identical data
+- id: C-DATA-002
+  title: Container storage paths
+  stage: 2
+  status: draft
+  requirements:
+  - Rootless Podman persistent graph storage MUST be under /data/containers.
+  - Ephemeral Podman runtime state MUST remain under /run/user/<uid>/ and MAY be lost on reboot.
+  - OCI image storage MUST survive OS A/B slot switches.
+  - The appliance MUST NOT need to pull an OCI image during normal boot.
+  evidence:
+  - podman info --format json
+  - Boot ROOT-A then ROOT-B with network disconnected and verify containers start
+- id: C-DATA-003
+  title: SQLite durability configuration
+  stage: 4
+  status: decision-required
+  requirements:
+  - SQLite MUST remain in WAL mode unless a measured power-loss test justifies a different mode.
+  - The SQLite synchronous mode MUST be explicitly selected and recorded; architecture v0.5 does not freeze the value.
+  - Filesystem and mount options MUST NOT disable normal ext4 write barriers or otherwise trade durability for benchmark speed.
+  - Clean shutdown SHOULD checkpoint WAL, but correctness MUST NOT depend on clean shutdown.
+  - Power-cut testing MUST use the actual v1 storage medium and include repeated abrupt loss during active writes.
+  - Periodic integrity diagnostics MUST be separate from boot-health gating.
+  evidence:
+  - PRAGMA journal_mode
+  - PRAGMA synchronous
+  - mount output
+  - Power-cut test report
+  - Snapshot restore test
+  unresolved:
+  - Exact PRAGMA synchronous value
+  - Periodic quick_check cadence
+- id: C-RUNTIME-001
+  title: Rootless Podman host contract
+  stage: 2
+  status: draft
+  requirements:
+  - Service account MUST be epilykos with a fixed UID/GID frozen in the image source.
+  - subuid/subgid ranges MUST be fixed at image build time.
+  - The host MUST use cgroup v2, crun, and netavark.
+  - The epilykos systemd user manager MUST start at boot without an interactive login.
+  - Required OCI images MUST be preloaded before first normal boot.
+  - Image pull behavior MUST be explicit and MUST NOT make boot network-dependent.
+  evidence:
+  - id epilykos
+  - /etc/subuid and /etc/subgid
+  - podman info
+  - loginctl show-user epilykos
+  - Offline boot test
+  unresolved:
+  - Fixed UID/GID numbers
+  - Fixed subuid/subgid ranges
+- id: C-RUNTIME-002
+  title: Epilykos Quadlet
+  stage: 2
+  status: draft
+  requirements:
+  - The production Quadlet MUST reference an immutable image digest supplied by the active application manifest.
+  - The container MUST run as the epilykos service user or mapped rootless user, not as a privileged host process.
+  - Persistent /app/data MUST map to DATA.
+  - Application logs in appliance mode MUST go to stdout/stderr; the existing Winston file transport MUST be disabled or not
+    configured.
+  - The container SHOULD use a read-only root filesystem once Stage 2 proves no required writes occur outside mapped persistent/temporary
+    paths.
+  - Podman health MUST use a dedicated unauthenticated local health endpoint containing no secrets.
+  - Notify=healthy (or equivalent Quadlet readiness behavior) MUST gate systemd readiness.
+  evidence:
+  - Rendered systemd unit from Quadlet
+  - podman inspect
+  - Health endpoint test
+  - Filesystem write test
+  implementation_gap:
+  - The current dev branch does not expose an obvious dedicated /health or /healthz endpoint; one must be added or explicitly
+    identified.
+  - The current logger writes rotating files; appliance-mode stdout/stderr-only behavior requires an application switch or
+    configuration change.
+- id: C-RUNTIME-003
+  title: BMS bridge Quadlet
+  stage: 3
+  status: blocked-on-spike
+  requirements:
+  - privileged=true MUST NOT appear in the production appliance configuration without an approved exception.
+  - Capability/device access MUST be determined by the ordered Stage 3 spike, not guessed in advance.
+  - 'Test order: rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged; direct
+    HCI capabilities only if necessary.'
+  - The final D-Bus policy and device/capability set MUST be committed as code and regression-tested.
+  evidence:
+  - Stage 3 BLE hardware test report
+  - Static Quadlet scan
+  - D-Bus policy file
+- id: C-UPDATE-001
+  title: OS update trust model
+  stage: 5
+  status: draft
+  requirements:
+  - Every RAUC bundle MUST be signed.
+  - Development RAUC CA and Epilykos release RAUC CA MUST be separate trust anchors.
+  - Secure-boot keys MUST be a separate hierarchy from RAUC bundle-signing keys.
+  - Appliance images MUST trust the release RAUC CA; developer images MAY additionally trust a development CA according to
+    documented policy.
+  - The private release signing key MUST NOT be embedded in images or repositories.
+  - Installation of an invalid, unsigned, or untrusted bundle MUST fail before writing an update slot.
+  evidence:
+  - Valid signed-bundle install
+  - Invalid-signature rejection test
+  - Wrong-CA rejection test
+  - Repository secret scan
+- id: C-UPDATE-002
+  title: Application update manifest
+  stage: 5
+  status: draft
+  requirements:
+  - Application manifests MUST pin immutable OCI digests; tags such as latest and dev MUST NOT be accepted by the appliance
+    updater.
+  - Manifest MUST identify epilykos and bms-bridge independently.
+  - Updater state MUST distinguish current, candidate, and previous-known-good manifests.
+  - A candidate MUST be downloaded/verified before activation.
+  - Promotion MUST occur only after the candidate reaches application-health success.
+  - Failure MUST restore the previous-known-good manifest without changing the RAUC OS slot.
+  - The manifest MUST contain a monotonically increasing integer sequence used by C-UPDATE-004 for replay/downgrade protection.
+  - The human-readable release field is descriptive and MUST NOT be used as the anti-replay ordering primitive.
+  evidence:
+  - Schema validation test
+  - Reject-tag test
+  - Candidate failure rollback test
+  - OS slot unchanged assertion
+  manifest_schema:
+    schema: 1
+    release: string
+    images:
+      epilykos:
+        digest: sha256:<64 hex>
+        source: string
+      bms-bridge:
+        digest: sha256:<64 hex>
+        source: string
+    sequence: integer >= 1, monotonically increasing across promoted releases
+- id: C-UPDATE-003
+  title: Independent rollback behavior
+  stage: 5
+  status: draft
+  requirements:
+  - OS update failure MUST roll back via U-Boot/RAUC without reverting DATA.
+  - Application update failure MUST roll back OCI manifests without changing the boot slot.
+  - A successful application update followed by an OS rollback MUST retain the active application manifest unless an explicit
+    compatibility rule says otherwise.
+  - Compatibility metadata MAY later constrain OS/application combinations, but no hidden coupling is permitted.
+  evidence:
+  - 'Four-way matrix test: OS success/fail x application success/fail'
+  - DATA persistence assertion after each case
+- id: C-UPDATE-004
+  title: Application manifest delivery and trust
+  stage: 5
+  status: decision-required
+  requirements:
+  - The appliance MUST NOT accept an application candidate merely because its OCI images are digest-pinned; the manifest authorizing
+    those digests MUST itself arrive through an authenticated or explicitly user-approved trust path.
+  - 'Supported delivery paths MUST mirror the local-first OS-update model: USB/removable media, authenticated local upload/push,
+    and an optional user-specified URL.'
+  - 'The trust model for non-interactive manifest acceptance MUST be frozen before Stage 5 closes. Acceptable design families
+    are: a cryptographically signed manifest verified against a pinned application-release trust anchor; or a pinned/verified
+    source where every candidate requires explicit authenticated user approval. CI MUST NOT silently choose between these
+    models.'
+  - Transport security alone MUST NOT be treated as equivalent to release authorization unless the contract explicitly freezes
+    that model and its pinning/approval semantics.
+  - An untrusted, unsigned, incorrectly signed, substituted, or otherwise unauthorized manifest MUST be rejected before any
+    candidate OCI image is activated.
+  - Manifest verification MUST occur before C-UPDATE-002 candidate promotion logic begins.
+  - If application-manifest signing is selected, its trust anchor SHOULD be separate from the RAUC release CA so the two update
+    planes remain independently revocable.
+  - Every externally supplied application manifest MUST carry a monotonically increasing integer release sequence in addition
+    to the human-readable release/version string.
+  - The manifest trust decision MUST cover the release sequence together with the image digests; the sequence MUST NOT be
+    accepted from unsigned/unapproved metadata beside an otherwise trusted manifest.
+  - The appliance MUST persist the highest promoted release sequence on DATA and MUST reject externally supplied manifests
+    whose sequence is less than or equal to that floor as stale/replayed, unless an explicit authenticated downgrade procedure
+    is invoked.
+  - Automatic rollback to the internally retained previous-known-good manifest is not treated as accepting an old external
+    manifest and MUST remain possible without lowering the stored release-sequence floor.
+  - A failed candidate that is never promoted MUST NOT advance the stored highest promoted release sequence.
+  evidence:
+  - USB manifest delivery test
+  - Authenticated local upload/push test
+  - User-specified URL test if that path is enabled
+  - Tampered/substituted manifest rejection test
+  - Wrong-signer or untrusted-source rejection test
+  - Audit record showing source, trust result, release identifier, and selected digests without leaking secrets
+  - 'Valid old-manifest replay test: previously trusted manifest with sequence <= stored floor is rejected before OCI activation'
+  - Failed-candidate test confirming an unpromoted higher sequence does not advance the stored release floor
+  - Internal previous-known-good rollback test confirming rollback remains possible without lowering the stored release floor
+  unresolved:
+  - 'D-UPDATE-001: freeze application-manifest authenticity model and trust-anchor/source policy'
+  - Whether user-specified URL delivery is in v1 or remains Stage 6 nice-to-have
+  - Whether v1 exposes an explicit authenticated operator downgrade override; default external-manifest behavior remains reject-on-sequence-replay.
+- id: C-NET-001
+  title: Offline-boot invariant
+  stage: 2
+  status: draft
+  requirements:
+  - Boot MUST reach healthy Epilykos application state with Ethernet unplugged, Wi-Fi unconfigured, DNS unavailable, and Internet
+    unavailable.
+  - No service required for local inverter/BMS monitoring may have a hard dependency on network-online.target.
+  - Loss of network after boot MUST NOT stop local polling or corrupt persisted data.
+  evidence:
+  - Network-isolated cold boot
+  - systemd critical-chain inspection
+  - Network pull/reconnect test
+- id: C-PROV-001
+  title: Ethernet provisioning
+  stage: 1
+  status: draft
+  requirements:
+  - On first boot with DHCP Ethernet, the appliance MUST become discoverable by mDNS as epilykos.local.
+  - Provisioning MUST NOT require SSH or a terminal.
+  - Provisioning MUST work without vendor cloud connectivity.
+  evidence:
+  - Clean-flash Ethernet-only test from a separate client
+- id: C-PROV-002
+  title: Wi-Fi AP provisioning
+  stage: 1
+  status: draft
+  requirements:
+  - If no usable network is configured, a temporary provisioning AP/captive portal MUST be available according to the first-boot
+    state machine.
+  - Re-entry after initial provisioning MUST require the defined physical recovery gesture.
+  - Provisioning credentials and secrets MUST not be written to logs or diagnostics bundles.
+  evidence:
+  - Clean-flash Wi-Fi-only provisioning test
+  - Recovery-gesture re-entry test
+  - Secret-redaction test
+  unresolved:
+  - Exact physical/GPIO recovery gesture
+  - AP SSID naming and credential policy
+- id: C-PROV-003
+  title: USB Ethernet gadget provisioning
+  stage: 1
+  status: draft
+  requirements:
+  - Pi 5 USB gadget provisioning MUST expose a local network path sufficient to reach the provisioning UI.
+  - USB gadget provisioning MUST be available on first boot and after the physical recovery gesture.
+  - Documentation MUST warn that a host USB port may not supply sufficient power for a Pi 5.
+  - Failure of USB gadget setup MUST NOT prevent normal Ethernet/Wi-Fi provisioning.
+  evidence:
+  - Clean-flash USB-only provisioning test on supported host OSes
+  - Recovery-gesture USB re-entry test
+  unresolved:
+  - Minimum supported host OS matrix
+- id: C-RECOVERY-001
+  title: Slot exhaustion behavior
+  stage: 5
+  status: decision-required
+  requirements:
+  - Behavior when both ROOT-A and ROOT-B are unbootable MUST be deterministic and tested.
+  - If a RECOVERY boot target is retained, U-Boot MUST select it; the normal initramfs MUST NOT own slot-selection policy.
+  - If RECOVERY is deferred from v1, the v1 manual recovery procedure MUST be documented and tested before release.
+  evidence:
+  - Both-slots-bad hardware test
+  - Recovery/reflash runbook validation
+  unresolved:
+  - 'D-RECOVERY-001: include dedicated recovery partition in v1 or defer'
+- id: C-ACCESS-001
+  title: SSH maintenance access
+  stage: 4
+  status: decision-required
+  requirements:
+  - SSH MUST be disabled by default in the appliance image.
+  - Developer-image SSH policy MAY differ, but MUST be explicit and MUST NOT weaken the appliance default.
+  - Enabling SSH on an appliance MUST require an explicit authenticated administrator action through the local Epilykos settings
+    workflow; provisioning MUST NOT require SSH.
+  - When SSH is enabled through the appliance dashboard, the appliance MUST generate the SSH keypair as part of that workflow
+    rather than requiring the installer to pre-supply a public key.
+  - Password authentication MUST remain disabled and root login MUST remain disabled.
+  - Generated private-key material MUST NOT appear in logs, diagnostics bundles, backups, telemetry, or application manifests.
+  - The key lifecycle — private-key delivery/export, persistent storage if any, rotation, revocation, and behavior when SSH
+    is disabled again — MUST be frozen before Stage 4 closes.
+  evidence:
+  - Fresh appliance image test showing SSH unavailable by default
+  - Authenticated settings workflow test enabling SSH and generating a keypair
+  - Key-only non-root login success test
+  - Password login and root login rejection tests
+  - Disable/re-enable lifecycle test
+  - Secret-redaction test covering generated key material
+  unresolved:
+  - 'D-ACCESS-001: freeze generated-key private-key delivery/storage, rotation, revocation, and disable semantics'
+- id: C-TIME-001
+  title: Clock and synchronization
+  stage: 1
+  status: draft
+  requirements:
+  - The Pi 5 onboard RTC is the reference local clock source.
+  - The selected NTP client MUST be explicitly included and configured; it may not be assumed from distro defaults.
+  - Loss of Internet MUST NOT block boot.
+  - The dashboard MUST expose unsynchronized-clock state and provide a manual correction path.
+  evidence:
+  - Cold boot without network
+  - NTP recovery test
+  - RTC retention test when backup battery is fitted
+  unresolved:
+  - Exact NTP implementation and server policy
+- id: C-LOG-001
+  title: Logging and diagnostics
+  stage: 4
+  status: draft
+  requirements:
+  - Appliance-mode container logs MUST use stdout/stderr and be collected by journald.
+  - Persistent journal storage MUST live on DATA with a hard size cap.
+  - Diagnostics export MUST include journal, container status, RAUC status, boot-slot metadata, kernel version, hardware enumeration,
+    redacted network state, application version/digests, and database status.
+  - Diagnostics export MUST redact credentials, tokens, private keys, Wi-Fi PSKs, and application secrets.
+  evidence:
+  - Journal persistence across A/B switch
+  - Storage-cap test
+  - Diagnostics bundle content test
+  - Secret-redaction test
+  unresolved:
+  - Exact journal size cap
+- id: C-SECUREBOOT-001
+  title: Optional verified-boot chain
+  stage: 6
+  status: deferred-v1
+  requirements:
+  - No v1 documentation may claim full secure boot merely because Pi OTP verifies U-Boot.
+  - If implemented, the chain MUST cover Pi ROM/EEPROM trust → verified U-Boot → U-Boot-verified kernel/DTB/initramfs.
+  - Root filesystem integrity, if required, MUST be treated as a separate design problem such as dm-verity.
+  - Secure boot remains optional and MUST NOT be required for RAUC bundle authenticity.
+  evidence:
+  - Verified-boot negative test with tampered kernel/DTB/initramfs
+acceptance_tests:
+- id: T-BOOT-001
+  stage: 4
+  assertion: Developer and appliance images expose identical partition labels/order and boot through U-Boot.
+- id: T-BOOT-002
+  stage: 5
+  assertion: A deliberately broken candidate OS exhausts attempts and returns to the previous good slot.
+- id: T-BOOT-003
+  stage: 4
+  assertion: No network link does not prevent mark-good when host/application boot health is otherwise satisfied.
+- id: T-DATA-001
+  stage: 4
+  assertion: Database/settings written on one slot remain unchanged after booting the other slot.
+- id: T-DATA-002
+  stage: 4
+  assertion: Repeated abrupt power cuts during writes do not produce unacceptable corruption on the selected v1 storage hardware.
+- id: T-RUNTIME-001
+  stage: 2
+  assertion: Cold boot with all networking unavailable starts Epilykos from preloaded OCI images.
+- id: T-RUNTIME-002
+  stage: 2
+  assertion: Epilykos container health failure prevents systemd readiness/RAUC confirmation.
+- id: T-BLE-001
+  stage: 3
+  assertion: BMS bridge communicates with test hardware without privileged=true, or an approved exception exists.
+- id: T-UPDATE-001
+  stage: 5
+  assertion: Official signed RAUC bundle installs; invalid and wrong-CA bundles are rejected.
+- id: T-UPDATE-002
+  stage: 5
+  assertion: Broken application candidate rolls back to previous digest without switching OS slot.
+- id: T-UPDATE-003
+  stage: 5
+  assertion: OS rollback preserves DATA and active application-update state according to C-UPDATE-003.
+- id: T-PROV-001
+  stage: 1
+  assertion: Fresh image is provisionable over Ethernet without terminal access.
+- id: T-PROV-002
+  stage: 1
+  assertion: Fresh image is provisionable through temporary Wi-Fi AP/captive portal.
+- id: T-PROV-003
+  stage: 1
+  assertion: Fresh image is provisionable over USB Ethernet gadget; recovery gesture can re-enter this mode.
+- id: T-LOG-001
+  stage: 4
+  assertion: Diagnostics bundle contains required evidence and no configured secrets.
+- id: T-RECOVERY-001
+  stage: 5
+  assertion: Both-slots-bad behavior matches the resolved recovery contract.
+- id: T-BOOT-004
+  stage: 4
+  assertion: Corrupt or remove the U-Boot bootchooser environment and verify the documented deterministic recovery behavior
+    without silently booting an arbitrary slot.
+- id: T-UPDATE-004
+  stage: 5
+  assertion: A substituted/tampered or unauthorized application manifest is rejected before candidate OCI activation; a trusted/approved
+    manifest proceeds to C-UPDATE-002 health/promotion logic.
+- id: T-ACCESS-001
+  stage: 4
+  assertion: Fresh appliance has SSH disabled; authenticated dashboard enablement generates the appliance keypair, permits
+    key-only non-root login, rejects password/root login, and does not leak private-key material.
+- id: T-UPDATE-005
+  stage: 5
+  assertion: After promoting application sequence N, re-present a previously trusted/approved manifest with sequence <= N
+    and verify rejection before OCI activation; then verify internal previous-known-good rollback still works without lowering
+    the stored floor.
+decisions_required:
+- id: D-RECOVERY-001
+  blocks:
+  - C-RECOVERY-001
+  - C-BOOT-001
+  question: Include a dedicated recovery boot target in v1 or defer it and freeze a manual recovery procedure.
+  due_stage: 0
+  stage0_review_required: true
+  status: open
+- id: D-STORAGE-001
+  blocks:
+  - C-BOOT-001
+  question: Freeze exact BOOT/ROOT-A/ROOT-B/DATA sizes and filesystem types.
+  due_stage: 0
+  stage0_review_required: true
+  status: open
+- id: D-PROV-001
+  blocks:
+  - C-PROV-002
+  - C-PROV-003
+  question: Define the physical recovery gesture and USB host support matrix.
+  due_stage: 1
+  stage0_review_required: true
+  status: open
+- id: D-TIME-001
+  blocks:
+  - C-TIME-001
+  question: Choose and configure the NTP implementation/server policy.
+  due_stage: 1
+  stage0_review_required: true
+  status: open
+- id: D-RUNTIME-001
+  blocks:
+  - C-RUNTIME-001
+  question: Freeze epilykos UID/GID and subuid/subgid ranges.
+  due_stage: 2
+  stage0_review_required: true
+  status: open
+- id: D-BLE-001
+  blocks:
+  - C-RUNTIME-003
+  question: Run Stage 3 D-Bus/BlueZ spike and record minimum privilege set.
+  due_stage: 3
+  stage0_review_required: true
+  status: open
+- id: D-ACCESS-001
+  blocks:
+  - C-ACCESS-001
+  question: 'Freeze dashboard-generated SSH key lifecycle: private-key delivery/export, persistent storage if any, rotation,
+    revocation, and disable/re-enable semantics.'
+  due_stage: 4
+  stage0_review_required: true
+  status: open
+- id: D-BOOT-001
+  blocks:
+  - C-BOOT-002
+  question: Freeze U-Boot boot-attempt counts and environment storage/redundancy.
+  due_stage: 4
+  stage0_review_required: true
+  status: open
+- id: D-LOG-001
+  blocks:
+  - C-LOG-001
+  question: Freeze persistent journal storage cap.
+  due_stage: 4
+  stage0_review_required: true
+  status: open
+- id: D-SQLITE-001
+  blocks:
+  - C-DATA-003
+  question: Freeze SQLite synchronous mode and periodic quick_check cadence.
+  due_stage: 4
+  stage0_review_required: true
+  status: open
+- id: D-UPDATE-001
+  blocks:
+  - C-UPDATE-004
+  question: 'Freeze the application-manifest authenticity model: signed manifest with pinned application-release trust anchor,
+    or pinned/verified source plus authenticated per-candidate user approval; define v1 delivery paths.'
+  due_stage: 5
+  stage0_review_required: true
+  status: open
+test_fixture_notes:
+- tests:
+  - T-RUNTIME-001
+  - C-DATA-002 evidence
+  - C-NET-001 evidence
+  note: These intentionally exercise overlapping offline-boot conditions from different contract perspectives. CI SHOULD reuse
+    one network-isolated cold-boot fixture and record distinct assertions rather than build separate rigs.
+decision_governance:
+  ordering: The registry is ordered by due_stage then decision ID; list position is not priority.
+  stage_0_rule: Stage 0 MUST review the complete open decision registry and confirm each decision's due_stage. Only decisions
+    due at Stage 0 must be resolved before Stage 0 closes.
+  stage_close_rule: A stage MUST NOT close while any open decision with due_stage less than or equal to that stage remains
+    unresolved.
+  late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
+    decision; revision age has no effect on priority.

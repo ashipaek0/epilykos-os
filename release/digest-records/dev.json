@@ -1,0 +1,2 @@
+{"commit": "e976c160aa709c445cebc6860297af8b0b2d7266", "digest": "sha256:2360cce8162f4c556831bb2fcbd3ad5052bf8379072a423c5fd3c577417593d7", "image": "irunmole/epilykos-bms", "ref": "dev", "service": "epilykos-bms", "tag": "irunmole/epilykos-bms:dev", "version": "2.7.0"}
+{"commit": "e976c160aa709c445cebc6860297af8b0b2d7266", "digest": "sha256:58d80683716850ca3b39d674207d542d143fc8004fcfd97cfe01acd729824977", "image": "irunmole/epilykos", "ref": "dev", "service": "epilykos", "tag": "irunmole/epilykos:dev", "version": "2.7.0"}

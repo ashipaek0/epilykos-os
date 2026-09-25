@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Signing keys never live in the repository (C-UPDATE-001).
+*.key
+*.pem
+!**/public/*.pem

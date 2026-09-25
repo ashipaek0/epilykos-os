@@ -14,3 +14,4 @@ render:
 ## Self-test the validator against deliberately broken fixtures.
 test:
 	$(PYTHON) tools/test_validate_contracts.py
+	$(PYTHON) tools/test_sync_app_release.py

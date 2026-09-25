@@ -2,9 +2,9 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.4-draft  
+**Version:** 0.5-draft  
 **Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
-**Reference platform:** Raspberry Pi 5 (8 GB)  
+**Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
 **Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
 
 > This document converts the v0.5 narrative architecture into implementation contracts and acceptance gates. A contract marked **decision-required** or **blocked-on-spike** is deliberately not silently completed: CI must treat it as unresolved until the named decision/evidence exists.
@@ -36,6 +36,17 @@ Every application image build publishes a digest record (`service, image, digest
 
 In the other direction, when the OS needs an application change, §9 lists it, it lands in the application repository as a pull request into `dev`, and the contract cites the commit.
 
+### Hardware support tiers
+
+| Tier | Boards | What it means |
+|---|---|---|
+| **1 — tested** | Raspberry Pi 3 Model B (1 GB) | The maintainer's board. Every release-gating hardware test runs here; all evidence in §10 comes from it. |
+| **2 — best effort** | Raspberry Pi 4, Raspberry Pi 5 | Images are built in CI from the same source. Board support (kernel, firmware, bootloader, device trees) comes only from a maintained upstream project pinned to a reviewed revision. Untested unless community evidence exists, and release notes say so. |
+
+Because of this (`C-HW-001`, `I-010`):
+- Features that only exist on Tier 2 hardware (USB gadget provisioning, the Pi 5 RTC, NVMe boot) are optional and never gate a stage.
+- The Tier 1 design constraints are 1 GB RAM (`C-RESOURCE-001`), a microSD boot medium (`C-BOOT-001`, `C-DATA-003`), no RTC (`C-TIME-001`), and Bluetooth sharing the main UART (`C-RUNTIME-003`).
+
 ## 1. Normative language and contract states
 
 **MUST** is release-blocking for the referenced stage. **SHOULD** requires an explicit documented exception if not followed. **MAY** is optional.
@@ -63,20 +74,43 @@ CI validates that every contract required by a stage is either `passed` or expli
 | `I-007` | Neither update plane may activate a candidate solely on unauthenticated metadata: OS bundles and application manifests both require an explicit trust decision before activation. | RAUC signature-rejection tests plus application-manifest trust/rejection tests. |
 | `I-008` | Externally supplied application manifests are replay-protected by a monotonic release sequence stored on DATA; internal previous-known-good rollback remains independently available. | Application-manifest replay rejection plus internal rollback tests. |
 | `I-009` | Stable appliance releases reference only application images built from the Epilykos main branch; images built from dev are limited to developer images and the explicitly labelled dev channel. | Manifest provenance check: every digest in a stable manifest matches a digest record whose ref is main. |
+| `I-010` | Release-gating hardware evidence comes from a Tier 1 board. Tier 2 boards use only board support (kernel, firmware, bootloader, device trees) taken from a maintained upstream project, and are never described as tested without Tier 2 hardware evidence. | Evidence files name the board; release notes state the support level per board; Tier 2 board-support sources are pinned upstream references. |
 
 ## 3. Contracts
+
+### C-HW-001 — Hardware support tiers
+
+**Stage:** 0  
+**Status:** `draft`
+
+*Why:* The maintainer can only test on a Raspberry Pi 3B. Tier 2 support therefore relies on code other projects already run on those boards, rather than untested Epilykos-specific low-level work.
+
+**Requirements**
+
+- Tier 1 is the Raspberry Pi 3 Model B (1 GB). Every hardware test that gates a stage MUST pass on Tier 1.
+- Tier 2 (Raspberry Pi 4, Raspberry Pi 5) is best effort. Tier 2 images MUST build in CI from the same source, with the same partition topology and update mechanisms as Tier 1.
+- Tier 2 board support MUST come from a maintained upstream project (for example the per-board configuration of Home Assistant OS, Buildroot or meta-raspberrypi), pinned to a reviewed revision. Epilykos-specific patches to Tier 2 board support MUST be documented and SHOULD be avoided.
+- Release notes MUST state, per board, whether that release has hardware evidence. A Tier 2 board without evidence MUST be labelled untested.
+- Community hardware evidence for Tier 2 is accepted in the standard evidence format with the tester and board revision recorded; it never blocks a release.
+- A feature that exists only on Tier 2 hardware (USB gadget provisioning, onboard RTC, NVMe boot) MUST be optional and MUST NOT be required by any stage gate.
+
+**Required evidence**
+
+- CI build logs for every Tier 1 and Tier 2 image
+- Pinned upstream board-support references (repository + revision) per Tier 2 board
+- Release notes support table
 
 ### C-BOOT-000 — Boot-chain and build-system feasibility spike
 
 **Stage:** 0  
 **Status:** `blocked-on-spike`
 
-*Why:* v0.3 fixed U-Boot in front of the Pi 5 firmware at Stage 4. That path is less travelled on the Pi 5 than on earlier boards, so it is proven first rather than discovered late.
+*Why:* Proving the boot chain first, on the hardware that will produce all gating evidence, avoids discovering boot problems at Stage 4.
 
 **Requirements**
 
-- Before Stage 0 closes, the chosen A/B boot chain MUST be demonstrated on the reference Pi 5 with the intended v1 boot medium: select ROOT-A and ROOT-B, fall back after a failed boot, and boot with no network.
-- The spike MUST evaluate U-Boot + RAUC bootchooser (as specified by C-BOOT-002) and SHOULD evaluate Raspberry Pi firmware A/B (autoboot.txt / tryboot) with a RAUC custom backend as the fallback; the result is recorded in D-BOOT-002.
+- Before Stage 0 closes, the chosen A/B boot chain MUST be demonstrated on the Tier 1 board (Raspberry Pi 3B) with its v1 boot medium: select ROOT-A and ROOT-B, fall back after a failed boot, and boot with no network.
+- The spike MUST evaluate U-Boot + RAUC bootchooser (as specified by C-BOOT-002) on Tier 1. For Tier 2 boards the boot mechanism is the one the selected upstream project already uses on that board; Tier 2 is build-verified only unless community evidence exists (C-HW-001).
 - The spike MUST record the build system selected by D-PLATFORM-001 and the effort to maintain it (kernel/firmware update cadence, CVE response).
 - Contracts that name a specific bootloader (C-BOOT-002, C-RECOVERY-001) MUST be revised through review if the spike selects a different mechanism; they MUST NOT be silently reinterpreted.
 
@@ -87,7 +121,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 **Required evidence**
 
-- evidence/stage-0/boot-chain-spike.json (medium, firmware/bootloader versions, slot switch + fallback results)
+- evidence/stage-0/boot-chain-spike.json (board, medium, firmware/bootloader versions, slot switch + fallback results)
 - Serial console logs of both slot boots and one forced fallback
 - Written build-system comparison including Home Assistant OS (Buildroot + RAUC) as prior art
 
@@ -104,6 +138,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 - ROOT-A and ROOT-B MUST be equal size.
 - DATA MUST be a separate persistent filesystem and MUST survive OS slot switches and application rollbacks.
 - Exact partition sizes are intentionally unresolved by architecture v0.5 and MUST be frozen before Stage 0 closes.
+- The Tier 1 v1 boot medium is the microSD card: USB mass-storage boot on the original Pi 3B requires a one-time OTP setting and MUST NOT be assumed. Tier 2 boards MAY use USB or NVMe media supported by their upstream board support.
 
 **Required evidence**
 
@@ -213,6 +248,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 - The Quadlet MUST set SQLITE_SYNCHRONOUS explicitly to the value frozen by D-SQLITE-001; the application refuses OFF and reports the effective journal and synchronous mode in /healthz.
 - Telemetry samples are buffered for at most METRIC_FLUSH_INTERVAL_MS (5 s) before commit. The power-cut acceptance criterion MUST define acceptable telemetry loss as no more than this window plus the synchronous-mode window; configuration and settings writes are never buffered and MUST survive.
 - Daily snapshots and backup/restore stage full database copies on DATA; DATA free space MUST remain at least twice the database size plus the retained snapshots (see D-STORAGE-001).
+- Power-cut testing MUST run on the Tier 1 board with the recommended microSD card class. Documentation MUST recommend a high-endurance card and state the expected write volume per day so wear can be estimated.
 
 **Implementation status**
 
@@ -301,19 +337,43 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 - privileged=true MUST NOT appear in the production appliance configuration without an approved exception.
 - Capability/device access MUST be determined by the ordered Stage 3 spike, not guessed in advance.
-- Test order: rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged; direct HCI capabilities only if necessary.
+- Test order (on the Tier 1 board): rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged; direct HCI capabilities only if necessary.
 - The final D-Bus policy and device/capability set MUST be committed as code and regression-tested.
 
 **Current baseline**
 
 - Track 1 docker-compose.yaml runs bms-bridge with privileged: true, network_mode: host and /var/run/dbus mounted; the image also installs its own bluez.
 - The Stage 3 spike starts from this configuration and removes privilege step by step in the order above; the appliance SHOULD use host BlueZ over D-Bus rather than a BlueZ inside the container.
+- On the Tier 1 Pi 3B the onboard Bluetooth uses the PL011 UART; serial inverters and BMS on that board SHOULD use USB serial adapters so BLE and serial do not compete for the UART.
 
 **Required evidence**
 
 - Stage 3 BLE hardware test report
 - Static Quadlet scan
 - D-Bus policy file
+
+### C-RESOURCE-001 — Memory and storage budget on Tier 1
+
+**Stage:** 2  
+**Status:** `decision-required`
+
+**Requirements**
+
+- The complete appliance (host services, Podman, Epilykos, bms-bridge, journald) MUST run steady-state on the 1 GB Tier 1 board with the free-memory headroom frozen by D-RESOURCE-001.
+- The Epilykos container MUST cap the Node.js heap (NODE_OPTIONS=--max-old-space-size) and set a container memory limit, so a leak restarts the application instead of starving the host.
+- Swap, if used, MUST be compressed RAM (zram); swap on the SD card MUST NOT be configured.
+- OOM handling MUST protect journald, Podman and the health gate; the Epilykos and bms-bridge containers MUST be the preferred OOM victims and MUST restart automatically.
+- Storage growth (database, snapshots, journal) MUST be bounded or monitored so DATA cannot silently fill on the Tier 1 medium.
+
+**Unresolved before this contract can pass**
+
+- D-RESOURCE-001
+
+**Required evidence**
+
+- 72-hour soak on Tier 1 with active polling: memory, swap and OOM-event timeline
+- podman inspect showing memory limits and NODE_OPTIONS
+- Forced-leak test showing the container restarts and the host stays healthy
 
 ### C-RELEASE-001 — Release channels and image provenance
 
@@ -516,14 +576,13 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 ### C-PROV-003 — USB Ethernet gadget provisioning
 
 **Stage:** 1  
-**Status:** `draft`
+**Status:** `deferred-v1`
 
 **Requirements**
 
-- Pi 5 USB gadget provisioning MUST expose a local network path sufficient to reach the provisioning UI.
-- USB gadget provisioning MUST be available on first boot and after the physical recovery gesture.
-- Documentation MUST warn that a host USB port may not supply sufficient power for a Pi 5.
-- Failure of USB gadget setup MUST NOT prevent normal Ethernet/Wi-Fi provisioning.
+- USB Ethernet gadget provisioning is a Tier 2 capability only: the Pi 3B USB ports are host-only, so it MUST NOT be required by any stage gate (C-HW-001).
+- Where the board supports it (Pi 4, Pi 5 USB-C), gadget provisioning SHOULD use the upstream project's proven configuration and MUST NOT prevent Ethernet or Wi-Fi provisioning if it fails.
+- Documentation MUST warn that a host USB port may not supply sufficient power for a Pi 4 or Pi 5.
 
 **Unresolved before this contract can pass**
 
@@ -531,8 +590,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 **Required evidence**
 
-- Clean-flash USB-only provisioning test on supported host OSes
-- Recovery-gesture USB re-entry test
+- Community Tier 2 test report (best effort)
 
 ### C-RECOVERY-001 — Slot exhaustion behavior
 
@@ -589,7 +647,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 **Requirements**
 
-- The Pi 5 onboard RTC is the reference local clock source.
+- Boards without a real-time clock (Tier 1 Pi 3B, Pi 4) MUST persist the last known time on DATA and restore it early in boot, so the clock never starts before the last shutdown; the Pi 5 onboard RTC and optional I2C RTC modules MUST be used when present.
+- Until network time synchronisation succeeds, the clock MUST be reported as unsynchronised to the application and dashboard.
 - The selected NTP client MUST be explicitly included and configured; it may not be assumed from distro defaults.
 - Loss of Internet MUST NOT block boot.
 - The dashboard MUST expose unsynchronized-clock state and provide a manual correction path.
@@ -611,7 +670,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 - Cold boot without network
 - NTP recovery test
-- RTC retention test when backup battery is fitted
+- Tier 1 cold boot without network: clock is not earlier than the last shutdown and is flagged unsynchronised
+- RTC retention test on a board or module with a backup battery (best effort)
 
 ### C-LOG-001 — Logging and diagnostics
 
@@ -660,11 +720,14 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 | Test ID | Stage | Assertion |
 |---|---:|---|
-| `T-BOOT-000` | 0 | On the reference Pi 5 and v1 medium, the selected boot chain boots both slots, falls back after a forced failure and boots with no network. |
+| `T-BOOT-000` | 0 | On the Tier 1 Pi 3B with a microSD card, the selected boot chain boots both slots, falls back after a forced failure and boots with no network. |
+| `T-HW-001` | 1 | Every Tier 2 image builds in CI from the same source as Tier 1 with identical partition topology, and its board support is pinned to a recorded upstream revision. |
 | `T-PROV-001` | 1 | Fresh image is provisionable over Ethernet without terminal access. |
 | `T-PROV-002` | 1 | Fresh image is provisionable through temporary Wi-Fi AP/captive portal. |
-| `T-PROV-003` | 1 | Fresh image is provisionable over USB Ethernet gadget; recovery gesture can re-enter this mode. |
+| `T-PROV-003` | 1 | Tier 2 best effort, non-gating: a Pi 4/5 image is provisionable over USB Ethernet gadget. |
+| `T-TIME-001` | 1 | On the Tier 1 Pi 3B, a cold boot with no network restores a clock not earlier than the last shutdown and reports it unsynchronised until NTP succeeds. |
 | `T-RELEASE-001` | 2 | A stable manifest containing a digest whose record ref is dev (or with no record) fails the provenance check; an appliance image rejects a channel: dev manifest. |
+| `T-RESOURCE-001` | 2 | A 72-hour soak on the Tier 1 Pi 3B with active polling stays within the D-RESOURCE-001 budget with no host OOM kill; a forced application leak restarts only the container. |
 | `T-RUNTIME-001` | 2 | Cold boot with all networking unavailable starts Epilykos from preloaded OCI images. |
 | `T-RUNTIME-002` | 2 | Epilykos container health failure prevents systemd readiness/RAUC confirmation. |
 | `T-RUNTIME-003` | 2 | With a read-only container root, LOG_TO_FILE=false and a tmpfs /tmp, Epilykos starts, /healthz returns 200, and a backup restore upload succeeds. |
@@ -695,10 +758,10 @@ A stage is complete only when every test assigned to that stage passes and every
 
 | Stage | Gate |
 |---:|---|
-| 0 | The A/B boot chain and build system are proven on the reference Pi 5 and v1 medium (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
-| 1 | Ethernet, Wi-Fi AP and USB provisioning paths work from a clean flash without terminal access; provisioning captures the site time zone. |
-| 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; release channels and digest provenance are enforced. |
-| 3 | Serial/RS232/RS485 and BLE hardware tests pass; BMS bridge privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
+| 0 | Hardware tiers are recorded (`C-HW-001`); the A/B boot chain and build system are proven on the Tier 1 Pi 3B with a microSD card (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
+| 1 | Ethernet and Wi-Fi AP provisioning work on Tier 1 from a clean flash without terminal access; provisioning captures the site time zone; the clock survives an offline boot without an RTC; Tier 2 images build in CI. USB gadget provisioning is Tier 2 best effort. |
+| 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; the whole appliance fits the Tier 1 1 GB memory budget over a 72-hour soak; release channels and digest provenance are enforced. |
+| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; BMS bridge privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
 | 4 | Appliance policy is active: read-only root, persistent DATA, logging policy, SSH default-off/key lifecycle, U-Boot/RAUC bootchooser (or the mechanism chosen by `D-BOOT-002`), corrupted-environment recovery, power-cut telemetry-loss bound, and boot-health separation all pass hardware tests. |
 | 5 | Signed RAUC updates and trusted, replay-protected, digest-pinned, stable-channel OCI application updates both pass independent authenticity, success/failure, and rollback tests. |
 | 6 | Optional verified boot and user-specified update URL are implemented only if separately approved. |
@@ -709,19 +772,21 @@ The decision registry is **not** ordered by when a decision was introduced. It i
 
 Stage 0 must review the **entire** open decision backlog and confirm each decision's due stage. Only decisions due at Stage 0 have to be resolved before Stage 0 closes; later-stage decisions remain open but visible. A stage cannot close while an open decision whose `due_stage` is that stage or earlier remains unresolved.
 
-This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `D-UPDATE-001` (v0.2), and `D-PLATFORM-001`, `D-BOOT-002` and `D-RELEASE-001` (v0.4).
+This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `D-UPDATE-001` (v0.2), `D-PLATFORM-001`, `D-BOOT-002` and `D-RELEASE-001` (v0.4), and `D-HW-001` (resolved) and `D-RESOURCE-001` (v0.5).
 
 ## 7. Decisions that must not be guessed
 
 | Decision ID | Due stage | Status | Blocks | Question |
 |---|---:|---|---|---|
-| `D-BOOT-002` | 0 | `open` | `C-BOOT-000`, `C-BOOT-002` | Confirm U-Boot + RAUC bootchooser on Pi 5, or adopt Pi firmware A/B (autoboot.txt/tryboot) with a RAUC custom backend, from C-BOOT-000 evidence. |
-| `D-PLATFORM-001` | 0 | `open` | `C-BOOT-000` | Choose the OS build system (Yocto or Buildroot) with Home Assistant OS as prior art, including who maintains kernel/firmware updates. |
+| `D-BOOT-002` | 0 | `open` | `C-BOOT-000`, `C-BOOT-002` | Confirm U-Boot + RAUC bootchooser on the Tier 1 Pi 3B from C-BOOT-000 evidence; for Tier 2 boards, record which upstream boot mechanism (U-Boot, or Pi firmware tryboot/autoboot.txt with a RAUC custom backend) is adopted per board. |
+| `D-HW-001` | 0 | `resolved` | `C-HW-001` | Which boards are tested (Tier 1) and which are best effort (Tier 2)? **Resolved:** Tier 1: Raspberry Pi 3 Model B (the only maintainer-owned board). Tier 2 best effort: Raspberry Pi 4 and 5, using proven upstream board support. |
+| `D-PLATFORM-001` | 0 | `open` | `C-BOOT-000` | Choose the OS build system (Yocto or Buildroot). Prefer the option whose upstream already maintains A/B images for Pi 3, 4 and 5 (Home Assistant OS is Buildroot + RAUC on all three), since Tier 2 relies on that board support. |
 | `D-RECOVERY-001` | 0 | `open` | `C-RECOVERY-001`, `C-BOOT-001` | Include a dedicated recovery boot target in v1 or defer it and freeze a manual recovery procedure. |
-| `D-STORAGE-001` | 0 | `open` | `C-BOOT-001` | Freeze exact BOOT/ROOT-A/ROOT-B/DATA sizes and filesystem types. Inputs: DATA must hold the database (a production install is ~5.9 GB), two retained snapshots, backup/restore staging (2x database) and the capped journal. |
-| `D-PROV-001` | 1 | `open` | `C-PROV-002`, `C-PROV-003` | Define the physical recovery gesture and USB host support matrix. |
+| `D-STORAGE-001` | 0 | `open` | `C-BOOT-001` | Freeze exact BOOT/ROOT-A/ROOT-B/DATA sizes and filesystem types. Inputs: DATA must hold the database (a production install is ~5.9 GB), two retained snapshots, backup/restore staging (2x database) and the capped journal. The Tier 1 medium is a microSD card: include card capacity and endurance class in the decision. |
+| `D-PROV-001` | 1 | `open` | `C-PROV-002`, `C-PROV-003` | Define the physical recovery gesture (must work on the Tier 1 Pi 3B) and, for Tier 2 USB gadget provisioning, the supported host OS matrix. |
 | `D-TIME-001` | 1 | `open` | `C-TIME-001` | Choose and configure the NTP implementation/server policy. Also define how clock-sync state and the provisioned time zone reach the application. |
 | `D-RELEASE-001` | 2 | `open` | `C-RELEASE-001` | Freeze the release process: who may merge dev to main, version tag format, and how digest records are collected into a stable application manifest. |
+| `D-RESOURCE-001` | 2 | `open` | `C-RESOURCE-001` | Freeze the Tier 1 memory budget: minimum steady-state free memory, Node.js heap cap, container memory limits and zram size. Input: Epilykos 2.7.0 measured ~100 MB peak RSS (92 MB steady) with an empty database on an x86-64 dev machine; re-measure on the Pi 3B with a production-size database and bms-bridge running. |
 | `D-RUNTIME-001` | 2 | `open` | `C-RUNTIME-001` | Freeze epilykos UID/GID and subuid/subgid ranges. |
 | `D-BLE-001` | 3 | `open` | `C-RUNTIME-003` | Run Stage 3 D-Bus/BlueZ spike and record minimum privilege set. |
 | `D-ACCESS-001` | 4 | `open` | `C-ACCESS-001` | Freeze dashboard-generated SSH key lifecycle: private-key delivery/export, persistent storage if any, rotation, revocation, and disable/re-enable semantics. |
@@ -753,7 +818,8 @@ That target MUST fail when:
 - an application candidate can be activated without satisfying `C-UPDATE-004` manifest trust;
 - an externally supplied application manifest with sequence at or below the stored promoted-release floor can be activated without an explicit authenticated downgrade exception;
 - appliance SSH is enabled by default or permits password/root login;
-- developer and appliance partition topologies diverge;
+- developer and appliance partition topologies diverge, or a Tier 2 image's partition topology diverges from Tier 1;
+- a Tier 2 image fails to build, or its board support is not pinned to a recorded upstream revision;
 - required appliance OCI images are not present in the image manifest/preload set.
 
 Checks whose inputs do not exist yet (Quadlets, manifests, image builds) run as soon as the corresponding directory appears. Hardware-dependent tests MUST emit machine-readable evidence rather than being silently skipped. A permitted skip must name the missing hardware capability and must not count as a pass for a release gate.
@@ -780,7 +846,7 @@ The conditional read-only-container-root requirement in `C-RUNTIME-002` is inten
 
 ## 10. Evidence directory convention
 
-Implementation evidence SHOULD be committed or uploaded under a stable structure:
+Implementation evidence SHOULD be committed or uploaded under a stable structure. Every evidence file MUST name the board (and revision) it was produced on; release-gating evidence comes from the Tier 1 board.
 
 ```text
 evidence/
@@ -795,6 +861,7 @@ evidence/
 │   ├── podman-info.json
 │   ├── offline-boot.json
 │   ├── readonly-root.json
+│   ├── memory-soak-72h.json
 │   └── release-provenance.json
 ├── stage-3/
 │   └── ble-privilege-spike.json
@@ -818,6 +885,15 @@ A reviewer should be able to trace every release-blocking contract to concrete e
 The architecture is ready for implementation when all Stage 0 decisions are frozen where required, the complete later-stage decision backlog has been reviewed and assigned due stages, and this document plus `epilykos-os-contracts.yaml` are accepted as the source of truth. From that point onward, narrative architecture documents are explanatory; a code change that conflicts with a contract must either change the contract through review or be rejected.
 
 ## 12. Changelog
+
+### 0.5-draft
+
+- Hardware tiers (D-HW-001, resolved): Raspberry Pi 3B is the only tested board (Tier 1); Pi 4 and Pi 5 are best effort (Tier 2) on proven upstream board support. New I-010, C-HW-001, T-HW-001.
+- Pi 5 assumptions removed: Stage 0 boot spike and all gating hardware tests run on the Pi 3B; microSD is the Tier 1 v1 medium.
+- C-TIME-001: boards without an RTC persist and restore the last known time and report the clock unsynchronised until NTP; T-TIME-001.
+- C-PROV-003 USB gadget provisioning is Tier 2 only (Pi 3B USB is host-only) and no longer gates Stage 1.
+- New C-RESOURCE-001 / D-RESOURCE-001 / T-RESOURCE-001: 1 GB memory budget, heap and container limits, zram only, OOM policy.
+- C-RUNTIME-003: Pi 3B Bluetooth/UART note; D-PLATFORM-001 prefers an upstream that already maintains Pi 3/4/5 A/B images.
 
 ### 0.4-draft
 

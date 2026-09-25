@@ -69,7 +69,10 @@ def decisions(reg):
     rows = ['| Decision ID | Due stage | Status | Blocks | Question |', '|---|---:|---|---|---|']
     for d in reg['decisions_required']:
         blocks = ', '.join(f'`{b}`' for b in d['blocks'])
-        rows.append(f"| `{d['id']}` | {d['due_stage']} | `{d['status']}` | {blocks} | {cell(d['question'])} |")
+        question = cell(d['question'])
+        if d.get('resolution'):
+            question += f" **Resolved:** {cell(d['resolution'])}"
+        rows.append(f"| `{d['id']}` | {d['due_stage']} | `{d['status']}` | {blocks} | {question} |")
     return '\n'.join(rows)
 
 

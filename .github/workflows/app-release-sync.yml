@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: dev
       - uses: actions/setup-python@v5
@@ -68,7 +68,9 @@ jobs:
           SHORT: ${{ steps.apply.outputs.short }}
           SUMMARY: ${{ steps.apply.outputs.summary }}
         run: |
-          if git diff --quiet; then
+          # --porcelain also lists untracked files: the first release creates
+          # manifests/ and release/ from scratch, which `git diff` ignores.
+          if [ -z "$(git status --porcelain -- manifests release)" ]; then
             echo "No change (digests already recorded and pinned)."
             exit 0
           fi

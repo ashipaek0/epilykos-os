@@ -40,7 +40,7 @@ BR2_LINUX_KERNEL_CUSTOM_VERSION=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.31"
 BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="bcm2835"
-BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="board/epilykos/raspberrypi3/linux.fragment"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/linux.fragment"
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2837-rpi-3-b"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
@@ -49,7 +49,7 @@ BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 # VARIANT_PI covers the 0/1/2/3 family; there is no Pi-3-specific variant.
 BR2_PACKAGE_RPI_FIRMWARE=y
 BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI=y
-BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="board/epilykos/raspberrypi3/config.txt"
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/config.txt"
 
 # -- Bootloader: U-Boot (Kconfig build system, in-tree rpi_3_defconfig),
 # with RAUC's bootchooser env-var convention (BOOT_ORDER / BOOT_<slot>_LEFT
@@ -65,9 +65,9 @@ BR2_TARGET_UBOOT_NEEDS_DTC=y
 BR2_TARGET_UBOOT_NEEDS_OPENSSL=y
 BR2_PACKAGE_HOST_UBOOT_TOOLS=y
 BR2_PACKAGE_HOST_UBOOT_TOOLS_BOOT_SCRIPT=y
-BR2_PACKAGE_HOST_UBOOT_TOOLS_BOOT_SCRIPT_SOURCE="board/epilykos/raspberrypi3/boot.cmd"
+BR2_PACKAGE_HOST_UBOOT_TOOLS_BOOT_SCRIPT_SOURCE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/boot.cmd"
 BR2_PACKAGE_HOST_UBOOT_TOOLS_ENVIMAGE=y
-BR2_PACKAGE_HOST_UBOOT_TOOLS_ENVIMAGE_SOURCE="board/epilykos/raspberrypi3/uboot.env"
+BR2_PACKAGE_HOST_UBOOT_TOOLS_ENVIMAGE_SOURCE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/uboot.env"
 BR2_PACKAGE_HOST_UBOOT_TOOLS_ENVIMAGE_SIZE="0x4000"
 
 # -- Init / OS base --
@@ -111,9 +111,9 @@ BR2_PACKAGE_DNSMASQ=y
 # -- Rootfs shape --
 # BOOT/ROOT-A/ROOT-B/DATA sizes are D-STORAGE-001 (still open) — the sizes
 # below are placeholders for `genimage.cfg`, not a frozen decision.
-BR2_ROOTFS_OVERLAY="board/epilykos/raspberrypi3/rootfs-overlay"
-BR2_ROOTFS_POST_BUILD_SCRIPT="board/epilykos/raspberrypi3/post-build.sh"
-BR2_ROOTFS_POST_IMAGE_SCRIPT="board/epilykos/raspberrypi3/post-image.sh"
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/rootfs-overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/post-image.sh"
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
 BR2_TARGET_ROOTFS_EXT2_SIZE="768M"

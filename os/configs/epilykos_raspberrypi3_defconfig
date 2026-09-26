@@ -57,19 +57,20 @@ BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilyk
 # env-image generation live on host-uboot-tools, not the U-Boot target
 # package itself, as of recent Buildroot releases.
 #
-# Pinned to 2025.10 rather than left on Buildroot's "latest" (2026.04):
-# that latest release fails to build arch/arm/lib/bootm.c for this board
-# ("invalid register name for 'gd'" — global_data.h's AArch64 register
-# clobber leaking into a CONFIG_ARM=y 32-bit build). Recorded as a
-# genuine C-BOOT-000 finding, not silently routed around — if a newer
-# release fixes this, that's worth revisiting, but "latest" isn't a
-# reliable pin for a boot-chain component anyway.
+# "rpi_3_defconfig" is upstream U-Boot's AArch64 (64-bit) target for this
+# board (CONFIG_TARGET_RPI_3) — its own arch/arm/cpu/armv8 code is why
+# the "latest" pin above hit an AArch64-only register name. The genuinely
+# 32-bit target, matching this image's armv7/cortex-a7 kernel, is
+# "rpi_3_32b_defconfig" (CONFIG_TARGET_RPI_3_32B). Pinned to 2025.10
+# rather than left on Buildroot's "latest" (2026.04) simply because that
+# latest release was what surfaced the AArch64 mix-up in the first
+# place; worth revisiting once there's a specific reason to move.
 BR2_TARGET_UBOOT=y
 BR2_TARGET_UBOOT_CUSTOM_VERSION=y
 BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2025.10"
 BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
 BR2_TARGET_UBOOT_USE_DEFCONFIG=y
-BR2_TARGET_UBOOT_BOARD_DEFCONFIG="rpi_3"
+BR2_TARGET_UBOOT_BOARD_DEFCONFIG="rpi_3_32b"
 BR2_TARGET_UBOOT_FORMAT_DTB_IMG=y
 BR2_TARGET_UBOOT_NEEDS_DTC=y
 BR2_TARGET_UBOOT_NEEDS_OPENSSL=y

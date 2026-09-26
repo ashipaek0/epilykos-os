@@ -1,0 +1,33 @@
+#!/bin/sh
+# Format and grow the DATA partition to fill the card on first boot.
+#
+# genimage.cfg leaves DATA (partition 5, per this board's fixed layout —
+# boot/uboot-env/rootfs-a/rootfs-b/data) unformatted at build time, sized
+# only as a build-time placeholder: real microSD cards vary, and
+# D-STORAGE-001 (the frozen size/filesystem decision) is still open.
+#
+# STATUS: untested. Run only by epilykos-data-init.service, once, gated
+# on the DATA label not existing yet.
+set -e
+
+DEV=/dev/mmcblk0
+PART=5
+PART_DEV="${DEV}p${PART}"
+
+if blkid -L DATA >/dev/null 2>&1; then
+	exit 0
+fi
+
+echo "epilykos-data-init: first boot — formatting DATA (${PART_DEV})"
+
+# Grow partition 5 to use the rest of the card, then tell the kernel to
+# re-read the table before formatting.
+sfdisk -N "${PART}" --no-reread "${DEV}" <<-EOF
+	,+
+EOF
+blockdev --rereadpt "${DEV}" 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+
+mkfs.ext4 -F -L DATA "${PART_DEV}"
+
+exit 0

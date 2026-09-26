@@ -1,0 +1,23 @@
+#!/bin/sh
+# Boot-health check (C-BOOT-003) — run once per boot, late enough that a
+# failure here still leaves boot_tries available for U-Boot to fall back
+# on next power-cycle.
+#
+# STATUS: untested scaffold. "Mark-good conditions" (C-BOOT-003) names
+# what MUST be true before calling this a good boot; this only checks the
+# ones the OS layer alone can see. Whatever the appliance layer decides
+# (e.g. Epilykos's own /healthz, once it's wired up here) belongs
+# alongside these, not instead of them.
+set -e
+
+# systemd itself reached a stable target with nothing failed. "degraded"
+# (systemd's own term for "at least one unit failed") is deliberately not
+# accepted here.
+STATE=$(systemctl is-system-running --wait 2>/dev/null || true)
+if [ "${STATE}" != "running" ]; then
+	echo "epilykos-mark-good: system state is '${STATE}', not 'running'; not marking good" >&2
+	systemctl --failed --no-legend >&2 || true
+	exit 1
+fi
+
+rauc status mark-good

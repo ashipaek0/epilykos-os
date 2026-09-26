@@ -1,0 +1,22 @@
+# Config fragment applied on top of the mainline "bcm2709" defconfig.
+# Kept small and commented — anything here should trace to a contract.
+
+# Rootless Podman (C-RUNTIME-001): user namespaces + cgroup v2 controllers.
+CONFIG_USER_NS=y
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_FREEZER=y
+CONFIG_MEMCG=y
+CONFIG_CPUSETS=y
+CONFIG_OVERLAY_FS=y
+CONFIG_FUSE_FS=y
+
+# RAUC's uboot bootchooser backend and A/B rootfs use plain ext4 + the
+# in-tree squashfs is not needed; keep it off to shrink the kernel image.
+CONFIG_SQUASHFS=n
+
+# BMS bridge hardware access (Stage 3): serial/RS232/RS485, BLE.
+CONFIG_BLUETOOTH=y
+CONFIG_BLUETOOTH_HCIUART=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y

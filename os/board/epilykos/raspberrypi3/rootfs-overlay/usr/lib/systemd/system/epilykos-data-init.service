@@ -1,0 +1,16 @@
+[Unit]
+Description=EpilykosOS: format and grow the DATA partition on first boot
+DefaultDependencies=no
+Before=local-fs-pre.target
+# The script itself is idempotent (checks blkid -L DATA first); this
+# condition just skips even running it on every normal boot once the
+# label exists.
+ConditionPathExists=!/dev/disk/by-label/DATA
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/epilykos-data-init
+RemainAfterExit=yes
+
+[Install]
+WantedBy=local-fs-pre.target

@@ -1,0 +1,19 @@
+# Raspberry Pi firmware config.txt — Pi 3B (Tier 1).
+# The Pi's own bootloader (start.elf) reads this before U-Boot even runs;
+# it hands off to u-boot.bin, which then runs boot.scr (see boot.cmd).
+
+kernel=u-boot.bin
+enable_uart=1
+uart_2ndstage=1
+arm_64bit=0
+disable_overscan=1
+
+# Console stays on the mini-UART (ttyS0, GPIO 14/15) so the onboard
+# Bluetooth module (PL011, the Pi 3's only full UART) is left free for
+# Stage 3's BLE requirement (C-RUNTIME-003). enable_uart=1 forces a
+# stable core_freq so the mini-UART's baud rate doesn't drift — this is
+# what makes serial console evidence for C-BOOT-000 usable at all.
+# If BLE proves unreliable on the mini-UART's leftover clock budget once
+# there's hardware evidence, moving console to the PL011 with
+# dtoverlay=disable-bt (and BLE onto a USB dongle instead) is the fallback
+# — record that trade-off in evidence/stage-0, don't silently switch it.

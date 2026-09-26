@@ -1,0 +1,109 @@
+# EpilykosOS — Raspberry Pi 3B (Tier 1, tested), armv7 32-bit.
+#
+# STATUS: untested scaffold. Written against Buildroot 2024.02.x package
+# names/options from documentation, not verified with a real `make` run —
+# this repository has no access to Pi hardware or the multi-GB Buildroot/
+# toolchain/kernel downloads a build needs. Confirming this file actually
+# builds and boots (C-BOOT-000) is Stage 0 work still to do, on real
+# hardware, before D-BOOT-002 can be marked resolved.
+#
+# Modeled on Home Assistant OS's approach (Buildroot + U-Boot + RAUC on
+# Pi 3/4/5), per D-PLATFORM-001 — not a fork of HAOS's tree, but the same
+# combination of upstream pieces, reused rather than reinvented.
+
+BR2_arm=y
+BR2_cortex_a7=y
+BR2_ARM_ENABLE_NEON=y
+BR2_ARM_ENABLE_VFP=y
+
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+
+# -- Kernel: mainline Raspberry Pi Foundation tree, its own bcm2709
+# defconfig (covers Pi 2/3) as the base, plus a small fragment for what
+# the appliance needs on top (overlayfs, RAUC's dm-verity-free needs,
+# cgroups for rootless Podman). The exact version is a build-system
+# maintenance question recorded by C-BOOT-000's evidence, not frozen here.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.31"
+BR2_LINUX_KERNEL_USE_DEFCONFIG=y
+BR2_LINUX_KERNEL_DEFCONFIG="bcm2709"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="board/epilykos/raspberrypi3/linux.fragment"
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2837-rpi-3-b"
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+
+# -- Raspberry Pi firmware/GPU blobs (start.elf, config.txt base) --
+BR2_PACKAGE_RPI_FIRMWARE=y
+BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI3=y
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="board/epilykos/raspberrypi3/config.txt"
+
+# -- Bootloader: U-Boot, with RAUC's bootchooser env-var convention --
+# (BOOT_ORDER / BOOT_<slot>_LEFT — see os/board/epilykos/raspberrypi3/boot.cmd)
+BR2_TARGET_UBOOT=y
+BR2_TARGET_UBOOT_BOARDNAME="rpi_3"
+BR2_TARGET_UBOOT_FORMAT_DTB_IMG=y
+BR2_TARGET_UBOOT_NEEDS_DTC=y
+BR2_TARGET_UBOOT_NEEDS_OPENSSL=y
+BR2_TARGET_UBOOT_BOOT_SCRIPT=y
+BR2_TARGET_UBOOT_BOOT_SCRIPT_SOURCE="board/epilykos/raspberrypi3/boot.cmd"
+BR2_TARGET_UBOOT_ENVIMAGE=y
+BR2_TARGET_UBOOT_ENVIMAGE_SOURCE="board/epilykos/raspberrypi3/uboot.env"
+BR2_TARGET_UBOOT_ENVIMAGE_SIZE="0x4000"
+
+# -- Init / OS base --
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_JOURNAL_GATEWAY=n
+BR2_PACKAGE_SYSTEMD_NETWORKD=y
+BR2_PACKAGE_SYSTEMD_TIMESYNCD=y
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
+BR2_TARGET_GENERIC_HOSTNAME="epilykos"
+BR2_TARGET_GENERIC_ISSUE="EpilykosOS"
+
+# -- A/B update mechanism (C-RELEASE-001, C-BOOT-002) --
+BR2_PACKAGE_RAUC=y
+BR2_PACKAGE_RAUC_SERVICE=y
+BR2_PACKAGE_DBUS=y
+
+# -- Filesystem tools the appliance needs at runtime --
+BR2_PACKAGE_DOSFSTOOLS=y
+BR2_PACKAGE_DOSFSTOOLS_MKFS_FAT=y
+BR2_PACKAGE_E2FSPROGS=y
+BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
+BR2_PACKAGE_E2FSPROGS_TUNE2FS=y
+BR2_PACKAGE_UTIL_LINUX=y
+BR2_PACKAGE_UTIL_LINUX_SFDISK=y
+BR2_PACKAGE_UTIL_LINUX_LIBBLKID=y
+BR2_PACKAGE_UTIL_LINUX_LIBUUID=y
+
+# -- Rootless Podman host (C-RUNTIME-001) --
+BR2_PACKAGE_PODMAN=y
+BR2_PACKAGE_CONMON=y
+BR2_PACKAGE_CRUN=y
+BR2_PACKAGE_SLIRP4NETNS=y
+BR2_PACKAGE_FUSE_OVERLAYFS=y
+
+# -- Networking / provisioning (Stage 1, scaffolded early since it touches
+# the same base image) --
+BR2_PACKAGE_IWD=y
+BR2_PACKAGE_HOSTAPD=y
+BR2_PACKAGE_DNSMASQ=y
+BR2_PACKAGE_WPA_SUPPLICANT=n
+
+# -- Rootfs shape --
+# BOOT/ROOT-A/ROOT-B/DATA sizes are D-STORAGE-001 (still open) — the sizes
+# below are placeholders for `genimage.cfg`, not a frozen decision.
+BR2_ROOTFS_OVERLAY="board/epilykos/raspberrypi3/rootfs-overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="board/epilykos/raspberrypi3/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="board/epilykos/raspberrypi3/post-image.sh"
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="768M"
+BR2_TARGET_ROOTFS_EXT2_LABEL="RootFS-A"
+BR2_TARGET_ROOTFS_EXT2_GEN2FS=n
+# tar image kept too, so genimage.cfg has a plain rootfs it can duplicate
+# into both the A and B slots at image-build time
+BR2_TARGET_ROOTFS_TAR=y

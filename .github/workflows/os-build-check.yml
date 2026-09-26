@@ -1,0 +1,68 @@
+name: OS tree structural check
+
+# NOT a real build: a real Buildroot build downloads several GB (kernel,
+# toolchain, package sources) and commonly takes over an hour, well past
+# what's reasonable to run on every push. This only lints the os/ tree
+# for the mistakes that don't need a build to catch — see os/README.md
+# for actually building an image.
+
+on:
+  push:
+    paths:
+      - 'os/**'
+      - '.github/workflows/os-build-check.yml'
+  pull_request:
+    paths:
+      - 'os/**'
+      - '.github/workflows/os-build-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shell syntax check
+        run: |
+          set -e
+          for f in os/build.sh \
+                   os/board/epilykos/raspberrypi3/post-build.sh \
+                   os/board/epilykos/raspberrypi3/post-image.sh \
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-data-init \
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-mark-good; do
+            echo "sh -n $f"
+            sh -n "$f"
+          done
+      - name: Executable bits on scripts
+        run: |
+          set -e
+          for f in os/build.sh \
+                   os/board/epilykos/raspberrypi3/post-build.sh \
+                   os/board/epilykos/raspberrypi3/post-image.sh \
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-data-init \
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-mark-good; do
+            test -x "$f" || { echo "$f is not executable"; exit 1; }
+          done
+      - name: Every path a defconfig/genimage references exists in-tree
+        run: |
+          set -e
+          test -f os/configs/epilykos_raspberrypi3_defconfig
+          for rel in board/epilykos/raspberrypi3/linux.fragment \
+                     board/epilykos/raspberrypi3/config.txt \
+                     board/epilykos/raspberrypi3/boot.cmd \
+                     board/epilykos/raspberrypi3/uboot.env \
+                     board/epilykos/raspberrypi3/rootfs-overlay \
+                     board/epilykos/raspberrypi3/post-build.sh \
+                     board/epilykos/raspberrypi3/post-image.sh \
+                     board/epilykos/raspberrypi3/genimage.cfg; do
+            test -e "os/$rel" || { echo "missing os/$rel"; exit 1; }
+          done
+      - name: systemd service enable symlinks resolve
+        run: |
+          set -e
+          for link in $(find os/board/epilykos/raspberrypi3/rootfs-overlay/etc/systemd -type l); do
+            target="os/board/epilykos/raspberrypi3/rootfs-overlay$(readlink "$link")"
+            test -e "$target" || { echo "$link -> $(readlink "$link") does not resolve to $target"; exit 1; }
+          done

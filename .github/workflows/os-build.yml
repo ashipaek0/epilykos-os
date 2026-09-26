@@ -22,7 +22,12 @@ on:
         required: false
         default: raspberrypi3
   push:
-    branches: [dev, main]
+    # TEMP: claude/stage0-buildroot-rauc added only so this new workflow
+    # can actually be run once and verified before merge — workflow_dispatch
+    # can't target a workflow that isn't registered on the default branch
+    # yet, and push is the only trigger a not-yet-merged branch can use.
+    # Remove that branch name before merging.
+    branches: [dev, main, claude/stage0-buildroot-rauc]
     paths:
       - 'os/**'
       - '.github/workflows/os-build.yml'

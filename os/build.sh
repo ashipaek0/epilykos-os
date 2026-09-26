@@ -19,7 +19,7 @@
 set -e
 
 BOARD="${1:-raspberrypi3}"
-BUILDROOT_VERSION="2024.02.10"
+BUILDROOT_VERSION="2026.05.3"
 OS_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-${OS_DIR}/build}"
 BR_DIR="${BUILD_DIR}/buildroot-${BUILDROOT_VERSION}"

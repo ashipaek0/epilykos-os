@@ -56,7 +56,17 @@ BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilyk
 # — see os/board/epilykos/raspberrypi3/boot.cmd). Boot-script and
 # env-image generation live on host-uboot-tools, not the U-Boot target
 # package itself, as of recent Buildroot releases.
+#
+# Pinned to 2025.10 rather than left on Buildroot's "latest" (2026.04):
+# that latest release fails to build arch/arm/lib/bootm.c for this board
+# ("invalid register name for 'gd'" — global_data.h's AArch64 register
+# clobber leaking into a CONFIG_ARM=y 32-bit build). Recorded as a
+# genuine C-BOOT-000 finding, not silently routed around — if a newer
+# release fixes this, that's worth revisiting, but "latest" isn't a
+# reliable pin for a boot-chain component anyway.
 BR2_TARGET_UBOOT=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2025.10"
 BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
 BR2_TARGET_UBOOT_USE_DEFCONFIG=y
 BR2_TARGET_UBOOT_BOARD_DEFCONFIG="rpi_3"

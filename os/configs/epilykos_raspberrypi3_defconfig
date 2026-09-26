@@ -19,6 +19,10 @@ BR2_ARM_ENABLE_VFP=y
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
 
+# Speeds up every rebuild after the first (CI caches ~/.buildroot-ccache,
+# Buildroot's own default location for this).
+BR2_CCACHE=y
+
 # -- Kernel: mainline Raspberry Pi Foundation tree, its own bcm2709
 # defconfig (covers Pi 2/3) as the base, plus a small fragment for what
 # the appliance needs on top (overlayfs, RAUC's dm-verity-free needs,

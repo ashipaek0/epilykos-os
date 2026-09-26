@@ -1,0 +1,162 @@
+name: OS image build
+
+# The real thing: a from-scratch Buildroot build of EpilykosOS for a
+# real board (os/build.sh). This is NOT the fast structural lint in
+# os-build-check.yml — a cold run can take well over an hour even with
+# caching, so it does not run on every pull request. It runs on demand,
+# and on pushes to dev/main that touch the build tree (i.e. once a
+# change like this actually merges).
+#
+# What "passing" means here: the image built, Buildroot's own genimage
+# step assembled a partition-correct sdcard.img, and a few structural
+# checks below hold. It does NOT mean the image boots on a real Pi 3B —
+# that's C-BOOT-000, and needs the real hardware this environment
+# doesn't have. See the qemu-smoke-test job for a best-effort
+# kernel-boots-at-all check that is not a substitute for that evidence.
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'Board defconfig to build (os/configs/epilykos_<board>_defconfig)'
+        required: false
+        default: raspberrypi3
+  push:
+    branches: [dev, main]
+    paths:
+      - 'os/**'
+      - '.github/workflows/os-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Free up disk space
+        run: |
+          # A full Buildroot build (toolchain + kernel + rauc + podman +
+          # systemd, two rootfs copies) needs real headroom; the default
+          # runner image is otherwise too full of things this build
+          # never touches.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h /
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex cpio unzip rsync file wget git \
+            python3 python3-dev perl patch tar bzip2 lzop lz4 zstd \
+            libssl-dev libncurses-dev device-tree-compiler \
+            genimage mtools dosfstools e2fsprogs
+
+      - name: Cache Buildroot package downloads
+        uses: actions/cache@v4
+        with:
+          path: os/build/dl
+          key: os-dl-${{ hashFiles('os/configs/**', 'os/board/**') }}
+          restore-keys: |
+            os-dl-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: os-ccache-${{ runner.os }}-${{ github.event.inputs.board || 'raspberrypi3' }}-${{ hashFiles('os/configs/**', 'os/board/**') }}
+          restore-keys: |
+            os-ccache-${{ runner.os }}-${{ github.event.inputs.board || 'raspberrypi3' }}-
+            os-ccache-${{ runner.os }}-
+
+      - name: Build
+        run: os/build.sh "${{ github.event.inputs.board || 'raspberrypi3' }}"
+
+      - name: Structural checks on the produced image
+        run: |
+          set -e
+          BOARD="${{ github.event.inputs.board || 'raspberrypi3' }}"
+          IMG=$(find os/build -path '*/output/images/sdcard.img' -print -quit)
+          test -n "$IMG" || { echo "sdcard.img not produced"; exit 1; }
+          echo "Image: $IMG ($(du -h "$IMG" | cut -f1))"
+
+          # Five partitions: boot, uboot-env, rootfs-a, rootfs-b, data.
+          PARTS=$(fdisk -l "$IMG" | grep -c "^${IMG}[0-9p]*[0-9]")
+          test "$PARTS" -eq 5 || { echo "expected 5 partitions, found $PARTS"; fdisk -l "$IMG"; exit 1; }
+
+          IMAGES_DIR=$(dirname "$IMG")
+          test -f "$IMAGES_DIR/rootfs-b.ext4" || { echo "rootfs-b.ext4 missing"; exit 1; }
+          e2label "$IMAGES_DIR/rootfs.ext4" | grep -qx RootFS-A || { echo "rootfs.ext4 not labeled RootFS-A"; exit 1; }
+          e2label "$IMAGES_DIR/rootfs-b.ext4" | grep -qx RootFS-B || { echo "rootfs-b.ext4 not labeled RootFS-B"; exit 1; }
+
+          echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
+
+      - name: Compress image for upload
+        run: zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: epilykos-${{ github.event.inputs.board || 'raspberrypi3' }}-sdcard
+          path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
+          retention-days: 14
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: epilykos-${{ github.event.inputs.board || 'raspberrypi3' }}-build-log
+          path: |
+            os/build/buildroot-*/output/build/build-time.log
+            os/build/buildroot-*/.config
+          retention-days: 14
+          if-no-files-found: ignore
+
+  qemu-smoke-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Best-effort only: QEMU's raspi3b model does not reproduce the real
+    # Pi firmware boot path (bootcode.bin/start.elf), so this boots the
+    # kernel directly rather than exercising boot.cmd/RAUC at all. A
+    # green result here means "the kernel this build produced isn't
+    # dead on arrival" — nothing more, and specifically not C-BOOT-000.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-arm zstd
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ github.event.inputs.board || 'raspberrypi3' }}-sdcard
+          path: artifact
+
+      - name: Extract kernel + dtb from the boot partition
+        run: |
+          set -e
+          zstd -d artifact/sdcard.img.zst -o sdcard.img
+          sudo apt-get install -y --no-install-recommends mtools
+          BOOT_OFFSET=$(fdisk -l sdcard.img | awk '/^sdcard.img1/ {print $2 * 512}')
+          mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::zImage ./zImage
+          mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::broadcom/bcm2837-rpi-3-b.dtb ./bcm2837-rpi-3-b.dtb
+
+      - name: Boot under QEMU raspi3b, watch for a panic or a prompt
+        run: |
+          set +e
+          timeout 90 qemu-system-arm -M raspi3b -m 1024 \
+            -kernel zImage -dtb bcm2837-rpi-3-b.dtb \
+            -append "console=ttyAMA0 root=/dev/mmcblk0p3 rootwait" \
+            -serial file:serial.log -display none -no-reboot
+          echo "--- serial log ---"
+          cat serial.log || true
+          if grep -qiE "kernel panic|Oops" serial.log; then
+            echo "kernel panicked"; exit 1
+          fi
+          grep -qi "Linux version" serial.log || { echo "kernel never even logged its own version line"; exit 1; }

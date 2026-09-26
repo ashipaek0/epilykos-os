@@ -2,7 +2,7 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.5-draft  
+**Version:** 0.5.1-draft  
 **Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
 **Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
 **Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
@@ -780,7 +780,7 @@ This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `
 |---|---:|---|---|---|
 | `D-BOOT-002` | 0 | `open` | `C-BOOT-000`, `C-BOOT-002` | Confirm U-Boot + RAUC bootchooser on the Tier 1 Pi 3B from C-BOOT-000 evidence; for Tier 2 boards, record which upstream boot mechanism (U-Boot, or Pi firmware tryboot/autoboot.txt with a RAUC custom backend) is adopted per board. |
 | `D-HW-001` | 0 | `resolved` | `C-HW-001` | Which boards are tested (Tier 1) and which are best effort (Tier 2)? **Resolved:** Tier 1: Raspberry Pi 3 Model B (the only maintainer-owned board). Tier 2 best effort: Raspberry Pi 4 and 5, using proven upstream board support. |
-| `D-PLATFORM-001` | 0 | `open` | `C-BOOT-000` | Choose the OS build system (Yocto or Buildroot). Prefer the option whose upstream already maintains A/B images for Pi 3, 4 and 5 (Home Assistant OS is Buildroot + RAUC on all three), since Tier 2 relies on that board support. |
+| `D-PLATFORM-001` | 0 | `resolved` | `C-BOOT-000` | Choose the OS build system (Yocto or Buildroot). Prefer the option whose upstream already maintains A/B images for Pi 3, 4 and 5 (Home Assistant OS is Buildroot + RAUC on all three), since Tier 2 relies on that board support. **Resolved:** Buildroot, following Home Assistant OS's combination of Buildroot + U-Boot + RAUC across Pi 3/4/5 (not a fork of its tree). Scaffolded as a BR2_EXTERNAL tree under os/; unbuilt and unverified until C-BOOT-000's hardware evidence exists. |
 | `D-RECOVERY-001` | 0 | `open` | `C-RECOVERY-001`, `C-BOOT-001` | Include a dedicated recovery boot target in v1 or defer it and freeze a manual recovery procedure. |
 | `D-STORAGE-001` | 0 | `open` | `C-BOOT-001` | Freeze exact BOOT/ROOT-A/ROOT-B/DATA sizes and filesystem types. Inputs: DATA must hold the database (a production install is ~5.9 GB), two retained snapshots, backup/restore staging (2x database) and the capped journal. The Tier 1 medium is a microSD card: include card capacity and endurance class in the decision. |
 | `D-PROV-001` | 1 | `open` | `C-PROV-002`, `C-PROV-003` | Define the physical recovery gesture (must work on the Tier 1 Pi 3B) and, for Tier 2 USB gadget provisioning, the supported host OS matrix. |
@@ -885,6 +885,12 @@ A reviewer should be able to trace every release-blocking contract to concrete e
 The architecture is ready for implementation when all Stage 0 decisions are frozen where required, the complete later-stage decision backlog has been reviewed and assigned due stages, and this document plus `epilykos-os-contracts.yaml` are accepted as the source of truth. From that point onward, narrative architecture documents are explanatory; a code change that conflicts with a contract must either change the contract through review or be rejected.
 
 ## 12. Changelog
+
+### 0.5.1-draft
+
+- D-PLATFORM-001 resolved: Buildroot, following Home Assistant OS's combination of Buildroot + U-Boot + RAUC across Pi 3/4/5 (not a fork of its tree). Written comparison at evidence/stage-0/build-system-decision.md.
+- Stage 0 build tree scaffolded under os/ (BR2_EXTERNAL): Pi 3B defconfig, U-Boot RAUC-bootchooser boot script, genimage A/B/DATA layout, first-boot DATA format+grow, C-BOOT-003 mark-good check. Untested — C-BOOT-000 stays blocked-on-spike until real hardware evidence exists.
+- D-BOOT-002, D-STORAGE-001 and D-RECOVERY-001 remain open; the scaffold implements a proposal for each, not their resolution.
 
 ### 0.5-draft
 

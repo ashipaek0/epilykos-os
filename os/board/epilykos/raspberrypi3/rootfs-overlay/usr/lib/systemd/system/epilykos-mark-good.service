@@ -1,0 +1,13 @@
+[Unit]
+Description=EpilykosOS: mark this boot good once the system is stable (C-BOOT-003)
+After=multi-user.target
+# Give services a little time to actually settle before judging the boot,
+# rather than marking good the instant multi-user.target is reached.
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 60
+ExecStart=/usr/sbin/epilykos-mark-good
+
+[Install]
+WantedBy=multi-user.target

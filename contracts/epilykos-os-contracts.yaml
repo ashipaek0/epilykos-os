@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.5-draft
+  version: 0.5.1-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -725,7 +725,10 @@ decisions_required:
     for Pi 3, 4 and 5 (Home Assistant OS is Buildroot + RAUC on all three), since Tier 2 relies on that board support.
   due_stage: 0
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Buildroot, following Home Assistant OS''s combination of Buildroot + U-Boot + RAUC across Pi 3/4/5 (not a
+    fork of its tree). Scaffolded as a BR2_EXTERNAL tree under os/; unbuilt and unverified until C-BOOT-000''s hardware
+    evidence exists.'
 - id: D-RECOVERY-001
   blocks:
   - C-RECOVERY-001
@@ -845,6 +848,15 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.5.1-draft
+  changes:
+  - 'D-PLATFORM-001 resolved: Buildroot, following Home Assistant OS''s combination of Buildroot + U-Boot + RAUC across
+    Pi 3/4/5 (not a fork of its tree). Written comparison at evidence/stage-0/build-system-decision.md.'
+  - 'Stage 0 build tree scaffolded under os/ (BR2_EXTERNAL): Pi 3B defconfig, U-Boot RAUC-bootchooser boot script, genimage
+    A/B/DATA layout, first-boot DATA format+grow, C-BOOT-003 mark-good check. Untested — C-BOOT-000 stays blocked-on-spike
+    until real hardware evidence exists.'
+  - D-BOOT-002, D-STORAGE-001 and D-RECOVERY-001 remain open; the scaffold implements a proposal for each, not their
+    resolution.
 - version: 0.5-draft
   changes:
   - 'Hardware tiers (D-HW-001, resolved): Raspberry Pi 3B is the only tested board (Tier 1); Pi 4 and Pi 5 are best effort

@@ -1,0 +1,4 @@
+# No extra Buildroot packages of our own yet — Epilykos itself is consumed
+# as a preloaded OCI image (C-DATA-002), not built from source here.
+# This file exists so Buildroot's BR2_EXTERNAL machinery has something to
+# source; it stays empty until that changes.

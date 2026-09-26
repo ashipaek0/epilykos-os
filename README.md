@@ -2,7 +2,7 @@
 
 EpilykosOS is a dedicated operating system for running [Epilykos](https://github.com/ashipaek0/epilykos) on a Raspberry Pi. You flash it, power it on and finish setup from a browser. From then on it runs, updates and recovers by itself, like an appliance.
 
-> **Status:** in development. The design is defined in [`contracts/EPILYKOS-OS-CONTRACTS.md`](contracts/EPILYKOS-OS-CONTRACTS.md); no image has been released yet.
+> **Status:** in development. The design is defined in [`contracts/EPILYKOS-OS-CONTRACTS.md`](contracts/EPILYKOS-OS-CONTRACTS.md). Image build work has started (Buildroot + U-Boot + RAUC, [`os/`](os/)) but is untested — no image has been released yet.
 
 ## Hardware
 

@@ -90,9 +90,13 @@ jobs:
           test -n "$IMG" || { echo "sdcard.img not produced"; exit 1; }
           echo "Image: $IMG ($(du -h "$IMG" | cut -f1))"
 
-          # Five partitions: boot, uboot-env, rootfs-a, rootfs-b, data.
-          PARTS=$(fdisk -l "$IMG" | grep -c "^${IMG}[0-9p]*[0-9]")
-          test "$PARTS" -eq 5 || { echo "expected 5 partitions, found $PARTS"; fdisk -l "$IMG"; exit 1; }
+          # Five real partitions: boot, uboot-env, rootfs-a, rootfs-b, data.
+          # MBR only allows 4 primary partitions, so genimage correctly
+          # wraps the 4th and 5th in an extended/logical pair — that's a
+          # 6th line in fdisk's listing (the "Extd" container) for 5
+          # actual partitions, not a bug. Exclude it before counting.
+          PARTS=$(fdisk -l "$IMG" | grep "^${IMG}[0-9p]*[0-9]" | grep -cv "Extd")
+          test "$PARTS" -eq 5 || { echo "expected 5 real partitions, found $PARTS"; fdisk -l "$IMG"; exit 1; }
 
           IMAGES_DIR=$(dirname "$IMG")
           test -f "$IMAGES_DIR/rootfs-b.ext4" || { echo "rootfs-b.ext4 missing"; exit 1; }

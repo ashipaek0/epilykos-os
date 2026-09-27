@@ -47,7 +47,12 @@ BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 
 # -- Raspberry Pi firmware/GPU blobs (start.elf, config.txt base) --
 # VARIANT_PI covers the 0/1/2/3 family; there is no Pi-3-specific variant.
+# BOOTCODE_BIN is a separate toggle from VARIANT_PI (confirmed against
+# rpi-firmware.mk after target-post-image failed looking for it) — the
+# Pi 3 has no on-chip second-stage boot ROM equivalent to the Pi 4's, so
+# bootcode.bin has to come from the SD card too.
 BR2_PACKAGE_RPI_FIRMWARE=y
+BR2_PACKAGE_RPI_FIRMWARE_BOOTCODE_BIN=y
 BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI=y
 BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/config.txt"
 

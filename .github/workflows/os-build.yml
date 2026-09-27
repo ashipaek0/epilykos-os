@@ -22,12 +22,7 @@ on:
         required: false
         default: raspberrypi3
   push:
-    # TEMP: claude/stage0-buildroot-rauc added only so this new workflow
-    # can actually be run once and verified before merge — workflow_dispatch
-    # can't target a workflow that isn't registered on the default branch
-    # yet, and push is the only trigger a not-yet-merged branch can use.
-    # Remove that branch name before merging.
-    branches: [dev, main, claude/stage0-buildroot-rauc]
+    branches: [dev, main]
     paths:
       - 'os/**'
       - '.github/workflows/os-build.yml'
@@ -154,9 +149,15 @@ jobs:
           set -e
           zstd -d artifact/sdcard.img.zst -o sdcard.img
           sudo apt-get install -y --no-install-recommends mtools
-          BOOT_OFFSET=$(fdisk -l sdcard.img | awk '/^sdcard.img1/ {print $2 * 512}')
+          # -o Device,Start avoids positional parsing of fdisk's human
+          # table, whose columns shift when the bootable-flag ("*")
+          # column is present.
+          BOOT_START=$(fdisk -o Device,Start -l sdcard.img | awk -v dev="sdcard.img1" '$1==dev {print $2}')
+          BOOT_OFFSET=$((BOOT_START * 512))
+          # bcm2837-rpi-3-b.dtb, no subdirectory (kernel DTB install is
+          # flattened; see genimage.cfg's own note).
           mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::zImage ./zImage
-          mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::broadcom/bcm2837-rpi-3-b.dtb ./bcm2837-rpi-3-b.dtb
+          mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::bcm2837-rpi-3-b.dtb ./bcm2837-rpi-3-b.dtb
 
       - name: Boot under QEMU raspi3b, watch for a panic or a prompt
         run: |

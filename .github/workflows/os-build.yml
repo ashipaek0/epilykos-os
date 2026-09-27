@@ -93,9 +93,11 @@ jobs:
           # Five real partitions: boot, uboot-env, rootfs-a, rootfs-b, data.
           # MBR only allows 4 primary partitions, so genimage correctly
           # wraps the 4th and 5th in an extended/logical pair — that's a
-          # 6th line in fdisk's listing (the "Extd" container) for 5
-          # actual partitions, not a bug. Exclude it before counting.
-          PARTS=$(fdisk -l "$IMG" | grep "^${IMG}[0-9p]*[0-9]" | grep -cv "Extd")
+          # 6th line in fdisk's listing (the "W95 Ext'd (LBA)" container)
+          # for 5 actual partitions, not a bug. Exclude it before counting
+          # (previous attempt matched "Extd" — fdisk actually prints
+          # "Ext'd" with an apostrophe, so that grep matched nothing).
+          PARTS=$(fdisk -l "$IMG" | grep "^${IMG}[0-9p]*[0-9]" | grep -cv "Ext")
           test "$PARTS" -eq 5 || { echo "expected 5 real partitions, found $PARTS"; fdisk -l "$IMG"; exit 1; }
 
           IMAGES_DIR=$(dirname "$IMG")

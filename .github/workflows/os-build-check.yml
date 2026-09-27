@@ -30,8 +30,8 @@ jobs:
           for f in os/build.sh \
                    os/board/epilykos/raspberrypi3/post-build.sh \
                    os/board/epilykos/raspberrypi3/post-image.sh \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-data-init \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-mark-good; do
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-data-init \
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-mark-good; do
             echo "sh -n $f"
             sh -n "$f"
           done
@@ -41,8 +41,8 @@ jobs:
           for f in os/build.sh \
                    os/board/epilykos/raspberrypi3/post-build.sh \
                    os/board/epilykos/raspberrypi3/post-image.sh \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-data-init \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/sbin/epilykos-mark-good; do
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-data-init \
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-mark-good; do
             test -x "$f" || { echo "$f is not executable"; exit 1; }
           done
       - name: Every path a defconfig/genimage references exists in-tree

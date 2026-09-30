@@ -6,7 +6,9 @@
 # genimage can't do itself is relabel a second rootfs copy for slot B,
 # so that happens here first.
 #
-# STATUS: untested scaffold.
+# STATUS: runs successfully as part of a real CI build (os-build.yml),
+# producing a partition-correct sdcard.img. Not proof the image boots —
+# that's C-BOOT-000, and needs real Pi 3B hardware.
 set -e
 
 BOARD_DIR="$(dirname "$0")"

@@ -5,13 +5,17 @@ Buildroot stays upstream and unmodified; everything in here is board
 config, the A/B boot chain, and the handful of scripts that stitch them
 together into an SD card image.
 
-**Status: untested scaffold.** Nothing in this directory has been run
-against a real Buildroot checkout or real hardware yet. It exists so the
-first real build attempt has something concrete to fail against, rather
-than starting from nothing — see the caveats in each file before trusting
-it. Proving it actually builds and boots on the Raspberry Pi 3B, with
-serial console evidence of a slot switch and a forced fallback, is
-`C-BOOT-000` — Stage 0's own gate, not yet closed.
+**Status: builds successfully, unverified on real hardware.** CI
+(`os-build.yml`) builds this tree against a real Buildroot release on
+every push to `dev`/`main` that touches `os/`, and it produces a
+partition-correct `sdcard.img` — that took several rounds of fixing real
+bugs the first attempts turned up (renamed Buildroot options, an
+AArch64/32-bit U-Boot mix-up, Buildroot's merged-`/usr` layout, genimage
+path resolution — see the commit history). What CI cannot check is
+whether the image actually *boots* on a real Pi 3B: no hardware exists in
+that environment. Proving that, with serial console evidence of a slot
+switch and a forced fallback, is `C-BOOT-000` — Stage 0's own gate, still
+open.
 
 ## Why Buildroot + U-Boot + RAUC
 
@@ -55,18 +59,33 @@ os/
 
 ## Building
 
+Host tools this needs beyond a normal Buildroot machine (Debian/Ubuntu
+package names): `genimage mtools dosfstools device-tree-compiler`. On
+Debian/Ubuntu:
+
 ```bash
+sudo apt install build-essential bc bison flex cpio unzip rsync file \
+  wget git python3 libssl-dev libncurses-dev device-tree-compiler \
+  genimage mtools dosfstools e2fsprogs
 ./build.sh raspberrypi3
 ```
 
 This is two Buildroot commands (`make epilykos_raspberrypi3_defconfig`,
 `make`) against a pinned Buildroot release — read `build.sh` before running
-it. It downloads several GB and commonly takes over an hour; there's no
-Pi hardware or that kind of disk/network budget in the environment this
-scaffold was written in, so it has not actually been run. If it fails on
-a real machine, that failure is useful signal for `C-BOOT-000` — please
-record it in `evidence/stage-0/`, not just fix it silently past what the
-contract expects to be reviewed.
+it. It downloads several GB and commonly takes over an hour.
+
+**CI runs this build too** (`.github/workflows/os-build.yml`) — on demand
+(Actions → OS image build → Run workflow) and on every push to `dev`/`main`
+that touches `os/`. It's separate from the fast structural lint that runs
+on pull requests (`os-build-check.yml`) precisely because it's this
+expensive. A green CI run means the image built and genimage assembled a
+partition-correct `sdcard.img` — a best-effort QEMU job in the same
+workflow additionally checks the resulting kernel boots at all, but
+**neither is `C-BOOT-000`**: that still needs a real Pi 3B, a real SD
+card, and a serial console log of a slot switch and a forced fallback. If
+either an on-machine build or a real-hardware boot fails, that failure is
+useful signal for `C-BOOT-000` — please record it in `evidence/stage-0/`,
+not just fix it silently past what the contract expects to be reviewed.
 
 ## Open decisions this depends on
 

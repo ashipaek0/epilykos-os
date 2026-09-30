@@ -7,7 +7,7 @@ After=multi-user.target
 [Service]
 Type=oneshot
 ExecStartPre=/bin/sleep 60
-ExecStart=/usr/sbin/epilykos-mark-good
+ExecStart=/usr/bin/epilykos-mark-good
 
 [Install]
 WantedBy=multi-user.target

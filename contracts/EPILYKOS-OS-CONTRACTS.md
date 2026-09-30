@@ -2,7 +2,7 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.5.1-draft  
+**Version:** 0.5.2-draft  
 **Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
 **Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
 **Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
@@ -17,7 +17,7 @@ Track 1 and Track 2 are separate products (`I-001`) and live in separate reposit
 
 | Repository | Holds | Consumes |
 |---|---|---|
-| `ashipaek0/epilykos` | The Epilykos application and its OCI images (`epilykos`, `epilykos-bms`). Appliance-facing application changes land here as small pull requests into `dev`. | — |
+| `ashipaek0/epilykos` | The Epilykos application and its OCI image (`epilykos`; Bluetooth runs inside it — the former `epilykos-bms` sidecar is retired). Appliance-facing application changes land here as small pull requests into `dev`. | — |
 | `epilykos-os` | This contract, the OS image build, RAUC configuration, Quadlets, provisioning, and CI (`make contracts`). | Application images **by digest only**, via application manifests. |
 
 Both repositories use the same branch model:
@@ -70,7 +70,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 | `I-003` | EpilykosOS and Epilykos application updates are independent rollback domains. | Independent forced-failure rollback tests for RAUC and OCI planes. |
 | `I-004` | The appliance boots and starts Epilykos with no Ethernet link, no configured Wi-Fi, and no Internet. | Offline boot acceptance test. |
 | `I-005` | Persistent user data is never stored only inside ROOT-A or ROOT-B. | Filesystem scan plus A/B rollback persistence test. |
-| `I-006` | Production appliance images MUST NOT use privileged=true for the BMS bridge unless a reviewed exception is recorded. | Static Quadlet scan and Stage 3 hardware test evidence. |
+| `I-006` | Production appliance images MUST NOT use privileged=true for the Epilykos container (which owns Bluetooth access) unless a reviewed exception is recorded. | Static Quadlet scan and Stage 3 hardware test evidence. |
 | `I-007` | Neither update plane may activate a candidate solely on unauthenticated metadata: OS bundles and application manifests both require an explicit trust decision before activation. | RAUC signature-rejection tests plus application-manifest trust/rejection tests. |
 | `I-008` | Externally supplied application manifests are replay-protected by a monotonic release sequence stored on DATA; internal previous-known-good rollback remains independently available. | Application-manifest replay rejection plus internal rollback tests. |
 | `I-009` | Stable appliance releases reference only application images built from the Epilykos main branch; images built from dev are limited to developer images and the explicitly labelled dev channel. | Manifest provenance check: every digest in a stable manifest matches a digest record whose ref is main. |
@@ -328,13 +328,14 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Health endpoint test
 - Filesystem write test
 
-### C-RUNTIME-003 — BMS bridge Quadlet
+### C-RUNTIME-003 — Bluetooth access for the Epilykos container
 
 **Stage:** 3  
 **Status:** `blocked-on-spike`
 
 **Requirements**
 
+- Bluetooth (BMS and inverter BLE modules) MUST be served by the Epilykos container talking to host BlueZ over the system D-Bus; no separate Bluetooth container and no BlueZ inside the container.
 - privileged=true MUST NOT appear in the production appliance configuration without an approved exception.
 - Capability/device access MUST be determined by the ordered Stage 3 spike, not guessed in advance.
 - Test order (on the Tier 1 board): rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged; direct HCI capabilities only if necessary.
@@ -342,8 +343,9 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 **Current baseline**
 
-- Track 1 docker-compose.yaml runs bms-bridge with privileged: true, network_mode: host and /var/run/dbus mounted; the image also installs its own bluez.
-- The Stage 3 spike starts from this configuration and removes privilege step by step in the order above; the appliance SHOULD use host BlueZ over D-Bus rather than a BlueZ inside the container.
+- Track 1 now runs Bluetooth inside the epilykos container (application dev branch; the bms-bridge sidecar is retired). The container runs as uid 1000 on a bridge network with only /run/dbus bind-mounted read-only; bleak talks to host BlueZ over D-Bus. No host networking, no privileged mode, no BlueZ in the image.
+- That is already the first step of the test order above; the Stage 3 spike confirms it on the Tier 1 board under rootless Podman (subuid mapping versus the host BlueZ D-Bus policy) and records the D-Bus policy it needs.
+- The OS image ships host BlueZ (bluez5_utils); bringing up the Pi 3B onboard radio (firmware, UART attach) is part of the spike.
 - On the Tier 1 Pi 3B the onboard Bluetooth uses the PL011 UART; serial inverters and BMS on that board SHOULD use USB serial adapters so BLE and serial do not compete for the UART.
 
 **Required evidence**
@@ -359,10 +361,10 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 **Requirements**
 
-- The complete appliance (host services, Podman, Epilykos, bms-bridge, journald) MUST run steady-state on the 1 GB Tier 1 board with the free-memory headroom frozen by D-RESOURCE-001.
+- The complete appliance (host services including BlueZ, Podman, Epilykos with its Bluetooth helper, journald) MUST run steady-state on the 1 GB Tier 1 board with the free-memory headroom frozen by D-RESOURCE-001.
 - The Epilykos container MUST cap the Node.js heap (NODE_OPTIONS=--max-old-space-size) and set a container memory limit, so a leak restarts the application instead of starving the host.
 - Swap, if used, MUST be compressed RAM (zram); swap on the SD card MUST NOT be configured.
-- OOM handling MUST protect journald, Podman and the health gate; the Epilykos and bms-bridge containers MUST be the preferred OOM victims and MUST restart automatically.
+- OOM handling MUST protect journald, Podman and the health gate; the Epilykos container MUST be the preferred OOM victim and MUST restart automatically.
 - Storage growth (database, snapshots, journal) MUST be bounded or monitored so DATA cannot silently fill on the Tier 1 medium.
 
 **Unresolved before this contract can pass**
@@ -431,7 +433,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 **Requirements**
 
 - Application manifests MUST pin immutable OCI digests; tags such as latest and dev MUST NOT be accepted by the appliance updater.
-- Manifest MUST identify epilykos and bms-bridge independently.
+- Manifest MUST identify each application image independently. epilykos is required; bms-bridge is a legacy optional entry for application releases that still ship the Bluetooth sidecar.
 - Updater state MUST distinguish current, candidate, and previous-known-good manifests.
 - A candidate MUST be downloaded/verified before activation.
 - Promotion MUST occur only after the candidate reaches application-health success.
@@ -450,9 +452,7 @@ images:
   epilykos:
     digest: sha256:<64 hex>
     source: string
-  bms-bridge:
-    digest: sha256:<64 hex>
-    source: string
+  bms-bridge: "optional, legacy releases only \u2014 {digest, source}"
 sequence: integer >= 1, monotonically increasing across promoted releases
 ```
 
@@ -731,7 +731,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 | `T-RUNTIME-001` | 2 | Cold boot with all networking unavailable starts Epilykos from preloaded OCI images. |
 | `T-RUNTIME-002` | 2 | Epilykos container health failure prevents systemd readiness/RAUC confirmation. |
 | `T-RUNTIME-003` | 2 | With a read-only container root, LOG_TO_FILE=false and a tmpfs /tmp, Epilykos starts, /healthz returns 200, and a backup restore upload succeeds. |
-| `T-BLE-001` | 3 | BMS bridge communicates with test hardware without privileged=true, or an approved exception exists. |
+| `T-BLE-001` | 3 | The Epilykos container reads a Bluetooth BMS and a BLE inverter module on test hardware without privileged=true, or an approved exception exists. |
 | `T-ACCESS-001` | 4 | Fresh appliance has SSH disabled; authenticated dashboard enablement generates the appliance keypair, permits key-only non-root login, rejects password/root login, and does not leak private-key material. |
 | `T-BOOT-001` | 4 | Developer and appliance images expose identical partition labels/order and boot through U-Boot. |
 | `T-BOOT-003` | 4 | No network link does not prevent mark-good when host/application boot health is otherwise satisfied. |
@@ -761,7 +761,7 @@ A stage is complete only when every test assigned to that stage passes and every
 | 0 | Hardware tiers are recorded (`C-HW-001`); the A/B boot chain and build system are proven on the Tier 1 Pi 3B with a microSD card (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
 | 1 | Ethernet and Wi-Fi AP provisioning work on Tier 1 from a clean flash without terminal access; provisioning captures the site time zone; the clock survives an offline boot without an RTC; Tier 2 images build in CI. USB gadget provisioning is Tier 2 best effort. |
 | 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; the whole appliance fits the Tier 1 1 GB memory budget over a 72-hour soak; release channels and digest provenance are enforced. |
-| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; BMS bridge privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
+| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; the Epilykos container's Bluetooth privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
 | 4 | Appliance policy is active: read-only root, persistent DATA, logging policy, SSH default-off/key lifecycle, U-Boot/RAUC bootchooser (or the mechanism chosen by `D-BOOT-002`), corrupted-environment recovery, power-cut telemetry-loss bound, and boot-health separation all pass hardware tests. |
 | 5 | Signed RAUC updates and trusted, replay-protected, digest-pinned, stable-channel OCI application updates both pass independent authenticity, success/failure, and rollback tests. |
 | 6 | Optional verified boot and user-specified update URL are implemented only if separately approved. |
@@ -786,9 +786,9 @@ This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `
 | `D-PROV-001` | 1 | `open` | `C-PROV-002`, `C-PROV-003` | Define the physical recovery gesture (must work on the Tier 1 Pi 3B) and, for Tier 2 USB gadget provisioning, the supported host OS matrix. |
 | `D-TIME-001` | 1 | `open` | `C-TIME-001` | Choose and configure the NTP implementation/server policy. Also define how clock-sync state and the provisioned time zone reach the application. |
 | `D-RELEASE-001` | 2 | `open` | `C-RELEASE-001` | Freeze the release process: who may merge dev to main, version tag format, and how digest records are collected into a stable application manifest. |
-| `D-RESOURCE-001` | 2 | `open` | `C-RESOURCE-001` | Freeze the Tier 1 memory budget: minimum steady-state free memory, Node.js heap cap, container memory limits and zram size. Input: Epilykos 2.7.0 measured ~100 MB peak RSS (92 MB steady) with an empty database on an x86-64 dev machine; re-measure on the Pi 3B with a production-size database and bms-bridge running. |
+| `D-RESOURCE-001` | 2 | `open` | `C-RESOURCE-001` | Freeze the Tier 1 memory budget: minimum steady-state free memory, Node.js heap cap, container memory limits and zram size. Input: Epilykos 2.7.0 measured ~100 MB peak RSS (92 MB steady) with an empty database on an x86-64 dev machine; re-measure on the Pi 3B with a production-size database and the Bluetooth helper running (it replaces the bms-bridge container). |
 | `D-RUNTIME-001` | 2 | `open` | `C-RUNTIME-001` | Freeze epilykos UID/GID and subuid/subgid ranges. |
-| `D-BLE-001` | 3 | `open` | `C-RUNTIME-003` | Run Stage 3 D-Bus/BlueZ spike and record minimum privilege set. |
+| `D-BLE-001` | 3 | `open` | `C-RUNTIME-003` | Run Stage 3 D-Bus/BlueZ spike for the Epilykos container and record minimum privilege set and D-Bus policy. |
 | `D-ACCESS-001` | 4 | `open` | `C-ACCESS-001` | Freeze dashboard-generated SSH key lifecycle: private-key delivery/export, persistent storage if any, rotation, revocation, and disable/re-enable semantics. |
 | `D-BOOT-001` | 4 | `open` | `C-BOOT-002` | Freeze U-Boot boot-attempt counts and environment storage/redundancy. |
 | `D-LOG-001` | 4 | `open` | `C-LOG-001` | Freeze persistent journal storage cap. |
@@ -839,6 +839,7 @@ These land in `ashipaek0/epilykos` as small pull requests into `dev`, and reach 
 | 7 | Show host clock-sync state on the dashboard (input interface defined by `D-TIME-001`) | `C-TIME-001` | Open |
 | 8 | Authenticated appliance-settings workflow for SSH enablement and device-generated keypair handling | `C-ACCESS-001` | Open (blocked on `D-ACCESS-001`) |
 | 9 | Application-update controls/status that cannot activate an untrusted, dev-channel or replayed manifest | `C-UPDATE-004`, `C-RELEASE-001` | Open (blocked on `D-UPDATE-001`) |
+| 10 | Bluetooth (BMS + inverter BLE modules) inside the `epilykos` container via host BlueZ over D-Bus; `bms-bridge` sidecar and `epilykos-bms` image retired | `C-RUNTIME-003`, `I-006` | In review (application pull request into `dev`) |
 
 These are application changes, not reasons to embed the Node.js application into the OS image build.
 
@@ -885,6 +886,12 @@ A reviewer should be able to trace every release-blocking contract to concrete e
 The architecture is ready for implementation when all Stage 0 decisions are frozen where required, the complete later-stage decision backlog has been reviewed and assigned due stages, and this document plus `epilykos-os-contracts.yaml` are accepted as the source of truth. From that point onward, narrative architecture documents are explanatory; a code change that conflicts with a contract must either change the contract through review or be rejected.
 
 ## 12. Changelog
+
+### 0.5.2-draft
+
+- Bluetooth moved into the epilykos container (application dev): the bms-bridge sidecar and irunmole/epilykos-bms image are retired. C-RUNTIME-003, I-006, T-BLE-001 and D-BLE-001 now apply to the epilykos container; C-RESOURCE-001 and D-RESOURCE-001 drop the separate container.
+- C-UPDATE-002: bms-bridge is an optional legacy manifest entry; sync_app_release.py and make contracts require only epilykos.
+- OS image adds host BlueZ (bluez5_utils) — the container reaches it over D-Bus.
 
 ### 0.5.1-draft
 

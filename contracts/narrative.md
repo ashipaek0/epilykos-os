@@ -15,7 +15,7 @@ Track 1 and Track 2 are separate products (`I-001`) and live in separate reposit
 
 | Repository | Holds | Consumes |
 |---|---|---|
-| `ashipaek0/epilykos` | The Epilykos application and its OCI images (`epilykos`, `epilykos-bms`). Appliance-facing application changes land here as small pull requests into `dev`. | — |
+| `ashipaek0/epilykos` | The Epilykos application and its OCI image (`epilykos`; Bluetooth runs inside it — the former `epilykos-bms` sidecar is retired). Appliance-facing application changes land here as small pull requests into `dev`. | — |
 | `epilykos-os` | This contract, the OS image build, RAUC configuration, Quadlets, provisioning, and CI (`make contracts`). | Application images **by digest only**, via application manifests. |
 
 Both repositories use the same branch model:
@@ -84,7 +84,7 @@ A stage is complete only when every test assigned to that stage passes and every
 | 0 | Hardware tiers are recorded (`C-HW-001`); the A/B boot chain and build system are proven on the Tier 1 Pi 3B with a microSD card (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
 | 1 | Ethernet and Wi-Fi AP provisioning work on Tier 1 from a clean flash without terminal access; provisioning captures the site time zone; the clock survives an offline boot without an RTC; Tier 2 images build in CI. USB gadget provisioning is Tier 2 best effort. |
 | 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; the whole appliance fits the Tier 1 1 GB memory budget over a 72-hour soak; release channels and digest provenance are enforced. |
-| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; BMS bridge privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
+| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; the Epilykos container's Bluetooth privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
 | 4 | Appliance policy is active: read-only root, persistent DATA, logging policy, SSH default-off/key lifecycle, U-Boot/RAUC bootchooser (or the mechanism chosen by `D-BOOT-002`), corrupted-environment recovery, power-cut telemetry-loss bound, and boot-health separation all pass hardware tests. |
 | 5 | Signed RAUC updates and trusted, replay-protected, digest-pinned, stable-channel OCI application updates both pass independent authenticity, success/failure, and rollback tests. |
 | 6 | Optional verified boot and user-specified update URL are implemented only if separately approved. |
@@ -145,6 +145,7 @@ These land in `ashipaek0/epilykos` as small pull requests into `dev`, and reach 
 | 7 | Show host clock-sync state on the dashboard (input interface defined by `D-TIME-001`) | `C-TIME-001` | Open |
 | 8 | Authenticated appliance-settings workflow for SSH enablement and device-generated keypair handling | `C-ACCESS-001` | Open (blocked on `D-ACCESS-001`) |
 | 9 | Application-update controls/status that cannot activate an untrusted, dev-channel or replayed manifest | `C-UPDATE-004`, `C-RELEASE-001` | Open (blocked on `D-UPDATE-001`) |
+| 10 | Bluetooth (BMS + inverter BLE modules) inside the `epilykos` container via host BlueZ over D-Bus; `bms-bridge` sidecar and `epilykos-bms` image retired | `C-RUNTIME-003`, `I-006` | In review (application pull request into `dev`) |
 
 These are application changes, not reasons to embed the Node.js application into the OS image build.
 

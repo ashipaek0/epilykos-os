@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.5.1-draft
+  version: 0.5.2-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -40,8 +40,8 @@ frozen_invariants:
   requirement: Persistent user data is never stored only inside ROOT-A or ROOT-B.
   verification: Filesystem scan plus A/B rollback persistence test.
 - id: I-006
-  requirement: Production appliance images MUST NOT use privileged=true for the BMS bridge unless a reviewed exception is
-    recorded.
+  requirement: Production appliance images MUST NOT use privileged=true for the Epilykos container (which owns Bluetooth
+    access) unless a reviewed exception is recorded.
   verification: Static Quadlet scan and Stage 3 hardware test evidence.
 - id: I-007
   requirement: 'Neither update plane may activate a candidate solely on unauthenticated metadata: OS bundles and application
@@ -279,10 +279,12 @@ contracts:
   - Uploads use TMPDIR (os.tmpdir()) instead of a hard-coded /tmp — app commit fabfa89.
   - Read-only container root still requires the Stage 2 write audit before the SHOULD becomes enforceable.
 - id: C-RUNTIME-003
-  title: BMS bridge Quadlet
+  title: Bluetooth access for the Epilykos container
   stage: 3
   status: blocked-on-spike
   requirements:
+  - Bluetooth (BMS and inverter BLE modules) MUST be served by the Epilykos container talking to host BlueZ over the system
+    D-Bus; no separate Bluetooth container and no BlueZ inside the container.
   - privileged=true MUST NOT appear in the production appliance configuration without an approved exception.
   - Capability/device access MUST be determined by the ordered Stage 3 spike, not guessed in advance.
   - 'Test order (on the Tier 1 board): rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged;
@@ -293,10 +295,13 @@ contracts:
   - Static Quadlet scan
   - D-Bus policy file
   baseline:
-  - 'Track 1 docker-compose.yaml runs bms-bridge with privileged: true, network_mode: host and /var/run/dbus mounted; the
-    image also installs its own bluez.'
-  - The Stage 3 spike starts from this configuration and removes privilege step by step in the order above; the appliance
-    SHOULD use host BlueZ over D-Bus rather than a BlueZ inside the container.
+  - Track 1 now runs Bluetooth inside the epilykos container (application dev branch; the bms-bridge sidecar is retired).
+    The container runs as uid 1000 on a bridge network with only /run/dbus bind-mounted read-only; bleak talks to host
+    BlueZ over D-Bus. No host networking, no privileged mode, no BlueZ in the image.
+  - That is already the first step of the test order above; the Stage 3 spike confirms it on the Tier 1 board under
+    rootless Podman (subuid mapping versus the host BlueZ D-Bus policy) and records the D-Bus policy it needs.
+  - The OS image ships host BlueZ (bluez5_utils); bringing up the Pi 3B onboard radio (firmware, UART attach) is part of
+    the spike.
   - On the Tier 1 Pi 3B the onboard Bluetooth uses the PL011 UART; serial inverters and BMS on that board SHOULD use USB serial
     adapters so BLE and serial do not compete for the UART.
 - id: C-RESOURCE-001
@@ -304,13 +309,13 @@ contracts:
   stage: 2
   status: decision-required
   requirements:
-  - The complete appliance (host services, Podman, Epilykos, bms-bridge, journald) MUST run steady-state on the 1 GB Tier
-    1 board with the free-memory headroom frozen by D-RESOURCE-001.
+  - The complete appliance (host services including BlueZ, Podman, Epilykos with its Bluetooth helper, journald) MUST run
+    steady-state on the 1 GB Tier 1 board with the free-memory headroom frozen by D-RESOURCE-001.
   - The Epilykos container MUST cap the Node.js heap (NODE_OPTIONS=--max-old-space-size) and set a container memory limit,
     so a leak restarts the application instead of starving the host.
   - Swap, if used, MUST be compressed RAM (zram); swap on the SD card MUST NOT be configured.
-  - OOM handling MUST protect journald, Podman and the health gate; the Epilykos and bms-bridge containers MUST be the preferred
-    OOM victims and MUST restart automatically.
+  - OOM handling MUST protect journald, Podman and the health gate; the Epilykos container MUST be the preferred OOM victim
+    and MUST restart automatically.
   - Storage growth (database, snapshots, journal) MUST be bounded or monitored so DATA cannot silently fill on the Tier 1
     medium.
   evidence:
@@ -372,7 +377,8 @@ contracts:
   requirements:
   - Application manifests MUST pin immutable OCI digests; tags such as latest and dev MUST NOT be accepted by the appliance
     updater.
-  - Manifest MUST identify epilykos and bms-bridge independently.
+  - Manifest MUST identify each application image independently. epilykos is required; bms-bridge is a legacy optional
+    entry for application releases that still ship the Bluetooth sidecar.
   - Updater state MUST distinguish current, candidate, and previous-known-good manifests.
   - A candidate MUST be downloaded/verified before activation.
   - Promotion MUST occur only after the candidate reaches application-health success.
@@ -395,9 +401,7 @@ contracts:
       epilykos:
         digest: sha256:<64 hex>
         source: string
-      bms-bridge:
-        digest: sha256:<64 hex>
-        source: string
+      bms-bridge: optional, legacy releases only — {digest, source}
     sequence: integer >= 1, monotonically increasing across promoted releases
 - id: C-UPDATE-003
   title: Independent rollback behavior
@@ -629,7 +633,8 @@ acceptance_tests:
   assertion: Epilykos container health failure prevents systemd readiness/RAUC confirmation.
 - id: T-BLE-001
   stage: 3
-  assertion: BMS bridge communicates with test hardware without privileged=true, or an approved exception exists.
+  assertion: The Epilykos container reads a Bluetooth BMS and a BLE inverter module on test hardware without privileged=true,
+    or an approved exception exists.
 - id: T-UPDATE-001
   stage: 5
   assertion: Official signed RAUC bundle installs; invalid and wrong-CA bundles are rejected.
@@ -776,7 +781,8 @@ decisions_required:
   - C-RESOURCE-001
   question: 'Freeze the Tier 1 memory budget: minimum steady-state free memory, Node.js heap cap, container memory limits
     and zram size. Input: Epilykos 2.7.0 measured ~100 MB peak RSS (92 MB steady) with an empty database on an x86-64 dev
-    machine; re-measure on the Pi 3B with a production-size database and bms-bridge running.'
+    machine; re-measure on the Pi 3B with a production-size database and the Bluetooth helper running (it replaces the
+    bms-bridge container).'
   due_stage: 2
   stage0_review_required: true
   status: open
@@ -790,7 +796,7 @@ decisions_required:
 - id: D-BLE-001
   blocks:
   - C-RUNTIME-003
-  question: Run Stage 3 D-Bus/BlueZ spike and record minimum privilege set.
+  question: Run Stage 3 D-Bus/BlueZ spike for the Epilykos container and record minimum privilege set and D-Bus policy.
   due_stage: 3
   stage0_review_required: true
   status: open
@@ -848,6 +854,14 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.5.2-draft
+  changes:
+  - 'Bluetooth moved into the epilykos container (application dev): the bms-bridge sidecar and irunmole/epilykos-bms image
+    are retired. C-RUNTIME-003, I-006, T-BLE-001 and D-BLE-001 now apply to the epilykos container; C-RESOURCE-001 and
+    D-RESOURCE-001 drop the separate container.'
+  - 'C-UPDATE-002: bms-bridge is an optional legacy manifest entry; sync_app_release.py and make contracts require only
+    epilykos.'
+  - OS image adds host BlueZ (bluez5_utils) — the container reaches it over D-Bus.
 - version: 0.5.1-draft
   changes:
   - 'D-PLATFORM-001 resolved: Buildroot, following Home Assistant OS''s combination of Buildroot + U-Boot + RAUC across

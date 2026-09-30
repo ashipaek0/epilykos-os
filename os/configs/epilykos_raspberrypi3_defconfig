@@ -68,6 +68,12 @@ BR2_PACKAGE_RAUC=y
 BR2_PACKAGE_RAUC_SERVICE=y
 BR2_PACKAGE_DBUS=y
 
+# -- Bluetooth (C-RUNTIME-003) --
+# Host BlueZ; the epilykos container reaches it over the system D-Bus
+# (/run/dbus bind mount), so no BlueZ ships inside the container. Onboard
+# radio bring-up on the Pi 3B (firmware, UART attach) is the Stage 3 spike.
+BR2_PACKAGE_BLUEZ5_UTILS=y
+
 # -- Filesystem tools the appliance needs at runtime --
 BR2_PACKAGE_DOSFSTOOLS=y
 BR2_PACKAGE_DOSFSTOOLS_MKFS_FAT=y

@@ -22,9 +22,10 @@ def payload(ref='dev', commit='c977b05eb45f6625619f24cc1c457d468297a0ce', app='a
     recs = [
         {'service': 'epilykos', 'image': 'irunmole/epilykos', 'digest': 'sha256:' + app * 64,
          'tag': f'irunmole/epilykos:{ref}', 'commit': commit, 'ref': ref, 'version': version},
-        {'service': 'epilykos-bms', 'image': 'irunmole/epilykos-bms', 'digest': 'sha256:' + bms * 64,
-         'tag': f'irunmole/epilykos-bms:{ref}', 'commit': commit, 'ref': ref, 'version': version},
     ]
+    if bms is not None:  # legacy builds still publish the Bluetooth sidecar image
+        recs.append({'service': 'epilykos-bms', 'image': 'irunmole/epilykos-bms', 'digest': 'sha256:' + bms * 64,
+                     'tag': f'irunmole/epilykos-bms:{ref}', 'commit': commit, 'ref': ref, 'version': version})
     p = {'ref': ref, 'commit': commit, 'records': recs}
     p.update(over)
     return p
@@ -78,6 +79,23 @@ try:
     assert v.returncode == 0, v.stderr
     ok('main build -> manifests/stable.yaml, provenance check passes')
 
+    # Bluetooth moved into the epilykos image: builds publish only `epilykos`.
+    r = sync(tmp, payload(bms=None, app='1', commit='1' * 40))
+    assert r.returncode == 0, r.stderr
+    dev = yaml.safe_load((tmp / 'manifests/dev.yaml').read_text())
+    assert dev['sequence'] == 3 and set(dev['images']) == {'epilykos'}, dev
+    v = validate(tmp)
+    assert v.returncode == 0, v.stderr
+    ok('epilykos-only build (no sidecar) -> manifest without bms-bridge, validator passes')
+
+    r = sync(tmp, payload(ref='main', bms=None, app='2', commit='2' * 40, version='2.9.0'))
+    assert r.returncode == 0, r.stderr
+    assert set(yaml.safe_load((tmp / 'manifests/stable.yaml').read_text())['images']) == {'epilykos'}
+    v = validate(tmp)
+    assert v.returncode == 0, v.stderr
+    ok('epilykos-only main build -> stable manifest drops bms-bridge')
+    stable = yaml.safe_load((tmp / 'manifests/stable.yaml').read_text())
+
     # Hand-edit the stable manifest to a dev-built digest: the validator must catch it.
     stable['images']['epilykos']['digest'] = 'sha256:' + 'c' * 64
     (tmp / 'manifests/stable.yaml').write_text(yaml.safe_dump(stable))
@@ -88,7 +106,7 @@ try:
     bad = {
         'tag instead of digest': payload(app='z'),  # 'z'*64 is not hex
         'unknown service': {**payload(), 'records': payload()['records'] + [{**payload()['records'][0], 'service': 'evil'}]},
-        'missing bms-bridge': {**payload(), 'records': payload()['records'][:1]},
+        'missing epilykos': {**payload(), 'records': payload()['records'][1:]},
         'record ref mismatch': {**payload(), 'records': [{**payload()['records'][0], 'ref': 'main'}, payload()['records'][1]]},
         'feature branch': payload(ref='feature-x'),
         'shell in version': payload(version='1.0;rm -rf /'),

@@ -8,6 +8,10 @@ with the `app-image-published` repository_dispatch event:
         {"service": "epilykos"|"epilykos-bms", "image": "...", "digest": "sha256:...",
          "tag": "...", "commit": "<sha>", "ref": "dev"|"main", "version": "x.y.z"}, ...]}
 
+An `epilykos` record is required. `epilykos-bms` (the legacy Bluetooth sidecar)
+is optional: application builds since Bluetooth moved into the main container
+no longer publish it, and a manifest then carries only `epilykos`.
+
 Effects (no network, no git — the workflow does those):
   - release/digest-records/<ref>.json      append the records (JSON lines, deduplicated)
   - manifests/<channel>.yaml               new manifest for the channel
@@ -29,6 +33,7 @@ from pathlib import Path
 import yaml
 
 SERVICE_MAP = {'epilykos': 'epilykos', 'epilykos-bms': 'bms-bridge'}
+REQUIRED_SERVICES = {'epilykos'}  # epilykos-bms: legacy sidecar, optional
 CHANNEL_FOR_REF = {'dev': 'dev', 'main': 'stable'}
 DIGEST = re.compile(r'^sha256:[0-9a-f]{64}$')
 SHA = re.compile(r'^[0-9a-f]{7,40}$')
@@ -68,7 +73,7 @@ def validate(payload):
         if not isinstance(r.get('version'), str) or not VERSION.match(r['version']):
             raise PayloadError(f'{svc}: invalid version')
         by_service[svc] = {k: r[k] for k in ('service', 'image', 'digest', 'tag', 'commit', 'ref', 'version') if k in r}
-    missing = set(SERVICE_MAP) - set(by_service)
+    missing = REQUIRED_SERVICES - set(by_service)
     if missing:
         raise PayloadError(f'records missing for: {", ".join(sorted(missing))}')
     return ref, commit, by_service

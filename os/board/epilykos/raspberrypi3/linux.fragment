@@ -15,7 +15,7 @@ CONFIG_FUSE_FS=y
 # in-tree squashfs is not needed; keep it off to shrink the kernel image.
 CONFIG_SQUASHFS=n
 
-# BMS bridge hardware access (Stage 3): serial/RS232/RS485, BLE.
+# Epilykos hardware access (Stage 3): serial/RS232/RS485, BLE via host BlueZ.
 CONFIG_BLUETOOTH=y
 CONFIG_BLUETOOTH_HCIUART=y
 CONFIG_SERIAL_8250=y

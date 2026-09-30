@@ -15,7 +15,8 @@ Checked once the inputs exist (directories are optional until then):
     `# exception: <id>` marker; the Epilykos unit sets LOG_TO_FILE=false and
     SQLITE_SYNCHRONOUS, and its HealthCmd calls /healthz
   - manifests/*.yaml: schema 1, channel stable|dev, integer sequence >= 1,
-    sha256 digests for epilykos and bms-bridge, no mutable tags; stable
+    sha256 digests for epilykos (and bms-bridge when a legacy manifest still
+    carries it), no mutable tags; stable
     manifests only reference digests with a `main` record in
     release/digest-records/*.json
 
@@ -148,7 +149,11 @@ def check_manifests():
         if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
             err(f'{name}: sequence must be an integer >= 1 (C-UPDATE-002)')
         images = m.get('images') or {}
+        # bms-bridge is the legacy Bluetooth sidecar: optional, but pinned
+        # like any other image when present.
         for svc in ('epilykos', 'bms-bridge'):
+            if svc == 'bms-bridge' and svc not in images:
+                continue
             img = images.get(svc) or {}
             digest = str(img.get('digest', ''))
             if not DIGEST.match(digest):

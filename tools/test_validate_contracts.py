@@ -80,6 +80,14 @@ run('epilykos quadlet without LOG_TO_FILE=false',
     files={'quadlets/epilykos.container': GOOD_QUADLET.replace('Environment=LOG_TO_FILE=false\n', '')}, expect='LOG_TO_FILE=false')
 run('epilykos quadlet without /healthz',
     files={'quadlets/epilykos.container': GOOD_QUADLET.replace('/healthz', '/api/ping')}, expect='/healthz')
+run('manifest without bms-bridge (Bluetooth in the epilykos image) passes',
+    files={'manifests/m.yaml': {**manifest(channel='dev'), 'images': {'epilykos': manifest()['images']['epilykos']}}})
+run('legacy bms-bridge entry with a mutable tag still fails',
+    files={'manifests/m.yaml': {**manifest(channel='dev'), 'images': {**manifest()['images'], 'bms-bridge': {'digest': 'dev'}}}},
+    expect='images.bms-bridge.digest')
+run('manifest missing epilykos fails',
+    files={'manifests/m.yaml': {**manifest(channel='dev'), 'images': {'bms-bridge': manifest()['images']['bms-bridge']}}},
+    expect='images.epilykos.digest')
 run('manifest with mutable tag', files={'manifests/m.yaml': manifest(digest='latest')}, expect='not a tag')
 run('manifest without channel', files={'manifests/m.yaml': {**manifest(), 'channel': None}}, expect='channel must be')
 run('manifest with string sequence', files={'manifests/m.yaml': manifest(seq='3')}, expect='sequence must be')

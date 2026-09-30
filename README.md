@@ -19,8 +19,8 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 
 **Reliable operation**
 - The system partition is read-only. Your data is kept on a separate persistent partition.
-- Epilykos and the BMS bridge are included in the image, so they start even when there is no network.
-- The application runs in rootless containers, and the BMS bridge gets only the device access it needs.
+- Epilykos is included in the image, so it starts even when there is no network.
+- The application runs in a rootless container. Bluetooth (battery BMS and inverter modules) is handled inside it through the host's BlueZ, with only the device access it needs.
 - The database is tuned to lose as little data as possible if the power is cut.
 - Logs go to the system journal and don't wear out the SD card.
 

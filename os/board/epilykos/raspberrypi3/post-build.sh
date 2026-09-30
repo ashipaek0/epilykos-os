@@ -2,7 +2,9 @@
 # Buildroot post-build hook (BR2_ROOTFS_POST_BUILD_SCRIPT) — runs against
 # the staged target rootfs ($TARGET_DIR) before it's packed into an image.
 #
-# STATUS: untested scaffold.
+# STATUS: runs successfully as part of a real CI build (os-build.yml).
+# Not verified at runtime — whether /data and /boot actually mount as
+# this fstab expects still needs real hardware (C-BOOT-000).
 set -e
 
 # RAUC needs its data directory even on a read-only-in-intent root; it's

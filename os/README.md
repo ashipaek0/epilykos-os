@@ -7,7 +7,7 @@ together into an SD card image.
 
 **Status: builds successfully, unverified on real hardware.** CI
 (`os-build.yml`) builds this tree against a real Buildroot release on
-every push to `dev`/`main` that touches `os/`, and it produces a
+every push to `main` that touches `os/`, and it produces a
 partition-correct `sdcard.img` — that took several rounds of fixing real
 bugs the first attempts turned up (renamed Buildroot options, an
 AArch64/32-bit U-Boot mix-up, Buildroot's merged-`/usr` layout, genimage
@@ -75,7 +75,7 @@ This is two Buildroot commands (`make epilykos_raspberrypi3_defconfig`,
 it. It downloads several GB and commonly takes over an hour.
 
 **CI runs this build too** (`.github/workflows/os-build.yml`) — on demand
-(Actions → OS image build → Run workflow) and on every push to `dev`/`main`
+(Actions → OS image build → Run workflow, on any branch, including `dev`) and on every push to `main`
 that touches `os/`. It's separate from the fast structural lint that runs
 on pull requests (`os-build-check.yml`) precisely because it's this
 expensive. A green CI run means the image built and genimage assembled a

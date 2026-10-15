@@ -96,6 +96,7 @@ jobs:
             os-ccache-${{ runner.os }}-
 
       - name: Build
+        id: build
         run: os/build.sh "${BOARD}"
 
       - name: Save Buildroot package downloads
@@ -159,24 +160,34 @@ jobs:
           ls -d "$TARGET_DIR"/usr/lib/python3*/site-packages/dbus_fast >/dev/null || { echo "dbus-fast missing"; exit 1; }
           test -x "$TARGET_DIR/usr/bin/iw" || { echo "iw missing"; exit 1; }
 
-          # Units the appliance depends on are enabled after preset-all.
-          for u in multi-user.target.wants/epilykos.service \
-                   multi-user.target.wants/epilykos-mark-good.service \
-                   multi-user.target.wants/epilykos-data-grow.service \
-                   multi-user.target.wants/systemd-networkd.service \
-                   multi-user.target.wants/iwd.service \
-                   multi-user.target.wants/epilykos-wifi-import.service \
-                   multi-user.target.wants/epilykos-improv.service \
-                   bluetooth.target.wants/bluetooth.service; do
-            test -L "$TARGET_DIR/etc/systemd/system/$u" || { echo "$u is not enabled"; exit 1; }
+          # Units the appliance depends on are enabled. Buildroot runs
+          # `systemctl preset-all` on a per-filesystem copy of the target
+          # directory, so the enable links exist only inside rootfs.ext4,
+          # not in output/target: read them from the image.
+          enabled() { debugfs -R "ls /etc/systemd/system/$1" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | tr -s ' ' '\n'; }
+          WANTS=$(enabled multi-user.target.wants)
+          for u in epilykos.service epilykos-mark-good.service epilykos-data-grow.service \
+                   systemd-networkd.service iwd.service epilykos-wifi-import.service \
+                   epilykos-improv.service; do
+            echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
+          enabled bluetooth.target.wants | grep -qx bluetooth.service || { echo "bluetooth.service is not enabled in rootfs.ext4"; exit 1; }
+          enabled getty.target.wants | grep -qx 'serial-getty@ttyS1.service' || { echo "no serial console login in rootfs.ext4"; exit 1; }
 
           echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
 
+      # Uploaded whenever the build itself succeeded, even if a structural
+      # check above failed, so a two-hour build is never thrown away; the
+      # job still fails in that case.
       - name: Compress image for upload
-        run: zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
+        if: always() && steps.build.outcome == 'success'
+        run: |
+          IMAGES_DIR=$(dirname "$(find os/build -path '*/output/images/sdcard.img' -print -quit)")
+          echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
+          zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
 
       - uses: actions/upload-artifact@v4
+        if: always() && steps.build.outcome == 'success'
         with:
           name: epilykos-${{ env.BOARD }}-sdcard
           path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
@@ -195,6 +206,9 @@ jobs:
 
   qemu-smoke-test:
     needs: build
+    # Also after a failed structural check: the image is uploaded whenever
+    # the build itself succeeded (if it wasn't, the download fails here).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Best-effort only: QEMU's raspi3b model has no VideoCore firmware, so

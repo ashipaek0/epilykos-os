@@ -1,0 +1,13 @@
+[Unit]
+Description=EpilykosOS: import Wi-Fi settings left on the BOOT partition
+RequiresMountsFor=/data
+After=boot.mount systemd-tmpfiles-setup.service
+Before=iwd.service epilykos-improv.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/epilykos-wifi-import
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -120,8 +120,20 @@ BR2_PACKAGE_PODMAN=y
 BR2_PACKAGE_CRUN=y
 BR2_PACKAGE_FUSE_OVERLAYFS=y
 
-# -- Wi-Fi client (Stage 1 provisioning builds on it) --
+# -- Wi-Fi (C-PROV-001/002) --
+# iwd joins the networks; systemd-networkd configures the address (and
+# mDNS) the same way as on Ethernet. readline enables iwctl for the
+# console; iw and the regulatory database set the Wi-Fi country.
 BR2_PACKAGE_IWD=y
+BR2_PACKAGE_READLINE=y
+BR2_PACKAGE_IW=y
+BR2_PACKAGE_WIRELESS_REGDB=y
+
+# -- Setup tools: Wi-Fi from files on BOOT (Raspberry Pi Imager or
+# wifi.txt) and Wi-Fi over Bluetooth LE (Improv), both small Python
+# programs; dbus-fast is the D-Bus library bleak uses.
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON_DBUS_FAST=y
 
 # -- Rootfs shape --
 # BOOT/ROOT-A/ROOT-B/DATA sizes are D-STORAGE-001 (still open); see

@@ -14,7 +14,8 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 ## Features
 
 **Setup with no terminal**
-- Set up over Ethernet, over the device's own Wi-Fi access point, or through a USB cable to a computer.
+- Plug in Ethernet, or give it your Wi-Fi from your phone over Bluetooth, from Raspberry Pi Imager's settings, or with a small text file on the SD card.
+- Then open `http://epilykos.local:3000` in a browser.
 - The site time zone is set during setup, so daily totals and forecasts follow local time.
 
 **Reliable operation**

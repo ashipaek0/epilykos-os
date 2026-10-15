@@ -83,6 +83,9 @@ case "${IMAGE_ID}" in
 	*) echo "post-build: could not derive the image ID" >&2; exit 1 ;;
 esac
 
+# The OS build's own version: the commit this image was built from.
+OS_VERSION=$(git -C "${REPO_DIR}" describe --always --dirty 2>/dev/null || echo unknown)
+
 cat > "${APP_DIR}/image.env" <<-ENV
 	# Written at image build time by post-build.sh from manifests/${CHANNEL}.yaml.
 	EPILYKOS_CHANNEL=${CHANNEL}
@@ -90,5 +93,6 @@ cat > "${APP_DIR}/image.env" <<-ENV
 	EPILYKOS_IMAGE_REF=${REF}
 	EPILYKOS_IMAGE_ID=${IMAGE_ID}
 	EPILYKOS_IMAGE_ARCHIVE=/usr/lib/epilykos/epilykos.oci.tar
+	EPILYKOS_OS_VERSION=${OS_VERSION}
 ENV
 echo "post-build: Epilykos image ${IMAGE_ID} preloaded"

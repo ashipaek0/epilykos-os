@@ -45,7 +45,9 @@ own partition layout).
   | p3 ROOT-B | `45504c4b-03` | root filesystem, slot B |
   | p4 DATA | `45504c4b-04` | `/data`, grown to fill the card on first boot |
 
-- Networking: DHCP on wired Ethernet, reachable as `epilykos.local` (mDNS).
+- Networking: DHCP on wired Ethernet and Wi-Fi (Ethernet preferred when
+  both are up), reachable as `epilykos.local` (mDNS). Wi-Fi is iwd; known
+  networks are kept on DATA (`/data/iwd`) so they survive OS updates.
 - Bluetooth: BlueZ with the onboard radio (its firmware and the mainline
   serdev attach on the PL011); the container uses it over D-Bus.
 - Epilykos: the image pinned by `manifests/<channel>.yaml` is preloaded
@@ -58,6 +60,39 @@ own partition layout).
 - Console only, no SSH (`C-ACCESS-001`): log in on the serial header
   (GPIO 14/15, 115200 8N1) or HDMI + USB keyboard as `root`, password
   `epilykos`.
+
+## Wi-Fi setup
+
+Any one of these works; Ethernet needs no setup at all.
+
+1. **A text file on the card.** After flashing, open the card's BOOT
+   drive on your computer, copy `wifi-example.txt` to `wifi.txt`, and
+   fill in `ssid=`, `password=` and `country=` (two-letter code, e.g. `NG`).
+2. **Raspberry Pi Imager's settings.** Imager only offers its Wi-Fi
+   settings for images from an OS list, not for "Use custom".
+   `tools/imager_os_list.py` writes that list for a published image; open
+   Imager with `rpi-imager --repo <list file or URL>`, pick EpilykosOS,
+   and fill in Wi-Fi under "Customise". A classic `wpa_supplicant.conf`
+   dropped on BOOT works too.
+3. **From a phone over Bluetooth.** With the box powered and not yet on
+   a network, open <https://www.improv-wifi.com> in Chrome (Android,
+   Windows, macOS, ChromeOS), choose "Connect device to Wi-Fi", pick
+   *Epilykos*, and enter the network. When it joins, the page links to
+   the dashboard. This is the open Improv Wi-Fi protocol; Home Assistant
+   discovers it too. iPhone Safari has no Web Bluetooth (the Bluefy
+   browser does).
+
+Files on BOOT are read once at boot (`epilykos-wifi-import`), saved as an
+iwd network, and deleted from the card so the password doesn't stay
+there. Imager's `firstrun.sh` is only read for its Wi-Fi settings, never
+run. Bluetooth setup is offered whenever the box has no network address,
+and for the first 30 minutes after each boot while no Wi-Fi is configured
+(so a box on Ethernet can still be given Wi-Fi). Passwords are never
+written to the journal (`C-PROV-002`).
+
+On the console, `iwctl station wlan0 show` and `networkctl` show the
+Wi-Fi state; `journalctl -u epilykos-wifi-import -u epilykos-improv`
+shows what setup did.
 
 ## First boot
 
@@ -87,10 +122,14 @@ os/
     genimage.cfg                          SD card layout
     post-build.sh                         fstab; preloads the pinned app image
     post-image.sh                         copies + relabels slot B, runs genimage
+    wifi-example.txt                      Wi-Fi template placed on BOOT
     rootfs-overlay/                       files copied onto the built rootfs:
                                             systemd units + presets, epilykos-run,
                                             RAUC system.conf, fw_env.config,
-                                            network/mDNS, Podman storage config
+                                            network/mDNS, iwd, Podman storage,
+                                            Wi-Fi setup (epilykos-wifi-import,
+                                            epilykos-improv, python/epilykos_wifi.py)
+  imager/icon.png                         icon for the Raspberry Pi Imager OS list
   build.sh                                fetches a pinned Buildroot release
                                            and builds against this tree
 ```

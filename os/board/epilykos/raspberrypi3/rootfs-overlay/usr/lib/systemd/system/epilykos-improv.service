@@ -1,0 +1,16 @@
+[Unit]
+Description=EpilykosOS: Wi-Fi setup over Bluetooth (Improv)
+Documentation=https://www.improv-wifi.com/ble/
+# Not needed for monitoring: nothing waits on this, and it is not part of
+# the boot-health check (C-BOOT-003).
+RequiresMountsFor=/data
+Wants=bluetooth.service iwd.service
+After=bluetooth.service iwd.service epilykos-wifi-import.service
+
+[Service]
+ExecStart=/usr/bin/epilykos-improv
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

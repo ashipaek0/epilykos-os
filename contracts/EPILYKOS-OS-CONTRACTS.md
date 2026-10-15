@@ -573,6 +573,10 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - Provisioning MUST NOT require SSH or a terminal.
 - Provisioning MUST work without vendor cloud connectivity.
 
+**Implementation status**
+
+- Tier 1 image: systemd-networkd DHCP on wired Ethernet and Wi-Fi, systemd-resolved answers mDNS for epilykos.local on both; the dashboard is at http://epilykos.local:3000. No SSH or terminal is involved.
+
 **Required evidence**
 
 - Clean-flash Ethernet-only test from a separate client
@@ -587,6 +591,12 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - If no usable network is configured, a temporary provisioning AP/captive portal MUST be available according to the first-boot state machine.
 - Re-entry after initial provisioning MUST require the defined physical recovery gesture.
 - Provisioning credentials and secrets MUST not be written to logs or diagnostics bundles.
+
+**Implementation status**
+
+- Wi-Fi without a terminal, three ways: (1) wifi.txt on the BOOT partition (template wifi-example.txt ships there); (2) Raspberry Pi Imager settings, via an OS list (tools/imager_os_list.py) declaring init_format systemd, imported from firstrun.sh / network-config / rpi-preseed.toml without running them; (3) Bluetooth LE using the open Improv Wi-Fi protocol (epilykos-improv), usable from a Web Bluetooth browser or Home Assistant.
+- Deviation from the letter of this contract: there is no Wi-Fi access point or captive portal; Bluetooth setup takes its place. It is offered whenever no network address is held, and for 30 minutes after boot while no Wi-Fi is configured. Re-entry by physical gesture is not implemented (D-PROV-001 open), so anyone in Bluetooth range can offer Wi-Fi while the box is offline.
+- Secrets: imported BOOT files are deleted after import; credentials are stored only in iwd network files (0600) on DATA; no setup path logs a password (covered by tools/test_wifi_provisioning.py and tools/test_improv_dbus.py).
 
 **Unresolved before this contract can pass**
 
@@ -919,6 +929,7 @@ The architecture is ready for implementation when all Stage 0 decisions are froz
 - Boot fix from the first hardware boot: root=LABEL= needs an initramfs and panicked the kernel; boot.cmd now boots root=PARTUUID with a fixed disk signature and passes rauc.slot=. Layout is four primary MBR partitions; U-Boot environment moved from a FAT file to two raw redundant copies (C-BOOT-001, C-BOOT-002 implementation status).
 - Image now carries networking (systemd-networkd DHCP, mDNS as epilykos.local), Bluetooth (BlueZ, onboard BCM43438 via the mainline serdev node and its firmware), and the Epilykos service with its image preloaded (C-RUNTIME-001, C-RUNTIME-002 implementation status). mark-good gates on C-BOOT-003 conditions.
 - make contracts also checks the appliance launcher (os/board/*/rootfs-overlay/usr/bin/epilykos-run).
+- Wi-Fi (iwd, networks kept on DATA) with three setup paths: wifi.txt on BOOT, Raspberry Pi Imager settings, and Bluetooth LE via the Improv Wi-Fi protocol (C-PROV-001, C-PROV-002 implementation status).
 
 ### 0.5.2-draft
 

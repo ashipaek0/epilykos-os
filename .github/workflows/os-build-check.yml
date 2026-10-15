@@ -24,15 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Shell syntax check
+      - name: Script syntax check
         run: |
           set -e
           for f in os/build.sh \
                    os/board/epilykos/raspberrypi3/post-build.sh \
                    os/board/epilykos/raspberrypi3/post-image.sh \
                    os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/*; do
-            echo "sh -n $f"
-            sh -n "$f"
+            case "$(head -n1 "$f")" in
+              *python3*) echo "parse $f"; python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" ;;
+              *) echo "sh -n $f"; sh -n "$f" ;;
+            esac
+          done
+          for f in os/board/epilykos/raspberrypi3/rootfs-overlay/usr/lib/epilykos/python/*.py; do
+            echo "parse $f"; python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f"
           done
       - name: Executable bits on scripts
         run: |
@@ -78,3 +83,9 @@ jobs:
           systemd-analyze verify --man=no "$OVERLAY"/usr/lib/systemd/system/epilykos*.service 2>&1 \
             | grep -v 'is not executable\|bluetooth.service\|rauc.service\|podman' | tee verify.log
           test ! -s verify.log
+      - name: Wi-Fi setup over Bluetooth (Improv) against fake BlueZ and iwd
+        run: |
+          set -e
+          pip install dbus-fast==4.0.4
+          python3 tools/test_wifi_provisioning.py
+          python3 tools/test_improv_dbus.py

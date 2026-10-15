@@ -15,3 +15,7 @@ enable systemd-timesyncd.service
 # SSH (C-ACCESS-001).
 enable serial-getty@.service ttyS1
 enable getty@.service tty1
+# Wi-Fi and its setup paths (BOOT files, Bluetooth).
+enable iwd.service
+enable epilykos-wifi-import.service
+enable epilykos-improv.service

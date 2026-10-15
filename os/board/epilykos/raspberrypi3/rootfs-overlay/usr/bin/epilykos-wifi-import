@@ -1,0 +1,92 @@
+#!/usr/bin/python3
+"""Import Wi-Fi settings left on the BOOT partition, then apply the Wi-Fi
+country. Runs on every boot, before iwd.
+
+Recognised files in the root of BOOT (any of them):
+  wifi.txt              EpilykosOS's own key=value file (see wifi-example.txt)
+  wpa_supplicant.conf   the classic Raspberry Pi headless file
+  firstrun.sh           Raspberry Pi Imager customisation ("systemd" format)
+  network-config        Raspberry Pi Imager customisation (cloud-init format)
+  rpi-preseed.toml      Raspberry Pi Imager customisation (newest format)
+
+Each network found becomes an iwd known network on DATA, and the file is
+deleted from BOOT afterwards so the password doesn't stay readable on the
+card. Imager's files are only read for their Wi-Fi settings, never run.
+Passwords are never logged (C-PROV-002).
+"""
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_wifi as wifi  # noqa: E402
+
+BOOT = os.environ.get('EPILYKOS_BOOT_DIR', '/boot')
+
+
+def log(msg):
+    print(f'epilykos-wifi-import: {msg}', flush=True)
+
+
+def boot_rw(writable):
+    if os.environ.get('EPILYKOS_BOOT_DIR'):
+        return True  # tests point this at a plain directory
+    opt = 'remount,rw' if writable else 'remount,ro'
+    return subprocess.run(['mount', '-o', opt, BOOT]).returncode == 0
+
+
+def import_boot_files():
+    found = [(name, parse) for name, parse in wifi.BOOT_SOURCES
+             if os.path.isfile(os.path.join(BOOT, name))]
+    if not found:
+        return
+    consumed = []
+    for name, parse in found:
+        path = os.path.join(BOOT, name)
+        try:
+            with open(path, encoding='utf-8', errors='surrogateescape') as f:
+                net = parse(f.read())
+        except (wifi.WifiError, ValueError, UnicodeError) as e:
+            log(f'{name}: not imported ({e}); left in place')
+            continue
+        consumed.append(name)
+        if net is None:
+            log(f'{name}: no Wi-Fi settings in it')
+            continue
+        wifi.write_iwd_network(net)
+        kind = 'open network' if not net.passphrase else 'password set'
+        log(f'{name}: added Wi-Fi network "{net.display_ssid}" ({kind}'
+            f'{", hidden" if net.hidden else ""})')
+        if net.country:
+            wifi.save_country(net.country)
+            log(f'{name}: Wi-Fi country {net.country}')
+
+    if consumed and boot_rw(True):
+        try:
+            for name in consumed:
+                os.unlink(os.path.join(BOOT, name))
+            log('removed ' + ', '.join(consumed) + ' from BOOT')
+        finally:
+            boot_rw(False)
+
+
+def apply_country():
+    country = wifi.load_country()
+    if not country or os.environ.get('EPILYKOS_BOOT_DIR'):
+        return
+    subprocess.run(['modprobe', 'cfg80211'], stderr=subprocess.DEVNULL)
+    r = subprocess.run(['iw', 'reg', 'set', country])
+    log(f'Wi-Fi country {country}' + ('' if r.returncode == 0 else ' could not be set'))
+
+
+def main():
+    if os.path.isdir(BOOT):
+        import_boot_files()
+    else:
+        log(f'{BOOT} is not mounted; nothing to import')
+    apply_country()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

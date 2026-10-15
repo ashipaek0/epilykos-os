@@ -88,9 +88,10 @@ BR2_TARGET_GENERIC_GETTY_PORT="ttyS1"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 BR2_TARGET_GENERIC_HOSTNAME="epilykos"
 BR2_TARGET_GENERIC_ISSUE="EpilykosOS"
-# A root password must be set for the console login; the appliance has no
-# SSH (C-ACCESS-001), so this is only reachable with physical access.
-BR2_TARGET_GENERIC_ROOT_PASSWD="epilykos"
+# No root password is set: the only way in is the local serial or HDMI
+# console (there is no SSH, C-ACCESS-001), which already means physical
+# access. A fixed password in this file would be the same on every box and
+# public, so it would add nothing but the appearance of protection.
 
 # -- A/B update mechanism (C-RELEASE-001, C-BOOT-002) --
 BR2_PACKAGE_RAUC=y

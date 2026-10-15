@@ -58,8 +58,8 @@ own partition layout).
   `/data` is mounted, Podman works and the app's `/healthz` is healthy
   (`C-BOOT-003`). No network is needed for any of it.
 - Console only, no SSH (`C-ACCESS-001`): log in on the serial header
-  (GPIO 14/15, 115200 8N1) or HDMI + USB keyboard as `root`, password
-  `epilykos`.
+  (GPIO 14/15, 115200 8N1) or HDMI + USB keyboard as `root`; there is no
+  password, because reaching either console already takes physical access.
 
 ## Wi-Fi setup
 

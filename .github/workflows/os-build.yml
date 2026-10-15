@@ -121,7 +121,7 @@ jobs:
 
           # Everything the Pi firmware and U-Boot load from BOOT.
           BOOT_START=$(fdisk -o Device,Start -l "$IMG" | awk -v dev="${IMG}1" '$1==dev {print $2}')
-          for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb; do
+          for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
             mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
           done
           mtype -i "${IMG}@@$((BOOT_START * 512))" ::config.txt | grep -qx 'arm_64bit=1' || { echo "config.txt is not 64-bit"; exit 1; }
@@ -132,11 +132,22 @@ jobs:
           cat "$TARGET_DIR/usr/lib/epilykos/image.env"
           grep -q "^EPILYKOS_CHANNEL=${EPILYKOS_CHANNEL}$" "$TARGET_DIR/usr/lib/epilykos/image.env" || { echo "wrong channel preloaded"; exit 1; }
 
+          # Wi-Fi: radio firmware, regulatory database, and the Python the
+          # setup tools run on (with dbus-fast for Bluetooth).
+          ls "$TARGET_DIR"/lib/firmware/brcm/brcmfmac43430-sdio*.bin >/dev/null || { echo "Wi-Fi firmware missing"; exit 1; }
+          ls "$TARGET_DIR"/lib/firmware/brcm/BCM43430A1*.hcd >/dev/null || { echo "Bluetooth firmware missing"; exit 1; }
+          test -f "$TARGET_DIR/lib/firmware/regulatory.db" || { echo "wireless regulatory database missing"; exit 1; }
+          ls -d "$TARGET_DIR"/usr/lib/python3*/site-packages/dbus_fast >/dev/null || { echo "dbus-fast missing"; exit 1; }
+          test -x "$TARGET_DIR/usr/bin/iw" || { echo "iw missing"; exit 1; }
+
           # Units the appliance depends on are enabled after preset-all.
           for u in multi-user.target.wants/epilykos.service \
                    multi-user.target.wants/epilykos-mark-good.service \
                    multi-user.target.wants/epilykos-data-grow.service \
                    multi-user.target.wants/systemd-networkd.service \
+                   multi-user.target.wants/iwd.service \
+                   multi-user.target.wants/epilykos-wifi-import.service \
+                   multi-user.target.wants/epilykos-improv.service \
                    bluetooth.target.wants/bluetooth.service; do
             test -L "$TARGET_DIR/etc/systemd/system/$u" || { echo "$u is not enabled"; exit 1; }
           done

@@ -9,6 +9,9 @@ set -e
 
 BOARD_DIR="$(dirname "$0")"
 
+# The Wi-Fi template users copy to wifi.txt on the BOOT partition.
+cp "${BOARD_DIR}/wifi-example.txt" "${BINARIES_DIR}/wifi-example.txt"
+
 cp "${BINARIES_DIR}/rootfs.ext4" "${BINARIES_DIR}/rootfs-b.ext4"
 e2label "${BINARIES_DIR}/rootfs-b.ext4" ROOT-B
 

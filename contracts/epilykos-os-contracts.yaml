@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.5.2-draft
+  version: 0.5.3-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -121,6 +121,13 @@ contracts:
   - Exact partition sizes are intentionally unresolved by architecture v0.5 and MUST be frozen before Stage 0 closes.
   - 'The Tier 1 v1 boot medium is the microSD card: USB mass-storage boot on the original Pi 3B requires a one-time OTP setting
     and MUST NOT be assumed. Tier 2 boards MAY use USB or NVMe media supported by their upstream board support.'
+  implementation_status:
+  - 'Tier 1 image (os/, 0.5.3-draft): four primary MBR partitions — BOOT (FAT32), ROOT-A and ROOT-B (equal size), DATA — with
+    a fixed disk signature (0x45504c4b) so every partition has a stable PARTUUID. Filesystem labels BOOT, ROOT-A, ROOT-B,
+    DATA.'
+  - 'Deviation, not yet resolved: the requirement says GPT. The Pi 3B boot ROM only reads an MBR, so GPT on Tier 1 means a
+    hybrid MBR and a first-boot grow that preserves it. Plain MBR is used until that is decided; sizes remain placeholders
+    (D-STORAGE-001).'
   evidence:
   - parted -s <image> unit B print
   - blkid output from first boot
@@ -135,6 +142,13 @@ contracts:
   - RAUC in userspace MUST be the only normal runtime component that mutates slot-good/bad state.
   - boot-attempts and boot-attempts-primary MUST be explicit configuration values; defaults are not acceptable.
   - Loss or corruption of the U-Boot environment MUST have a documented deterministic recovery behavior.
+  implementation_status:
+  - 'U-Boot 2025.10 (rpi_3, AArch64) runs boot.scr, which follows RAUC''s reference U-Boot script: BOOT_ORDER, BOOT_A_LEFT,
+    BOOT_B_LEFT, root=PARTUUID and rauc.slot= on the kernel command line.'
+  - 'Environment storage (proposal for D-BOOT-001): raw on the SD card in two redundant 16 KiB copies at 4 MiB and 4 MiB +
+    16 KiB, ahead of the first partition; /etc/fw_env.config gives fw_setenv (RAUC) the same locations. A blank or corrupt
+    environment falls back to U-Boot defaults and boot.cmd re-initialises A B / 3 / 3.'
+  - RAUC system.conf sets boot-attempts=3 and boot-attempts-primary=3 explicitly (proposed values; D-BOOT-001 still open).
   evidence:
   - U-Boot environment dump before/after install
   - Forced boot-failure test showing attempt decrement
@@ -158,6 +172,10 @@ contracts:
   - Failure to satisfy boot health within the configured timeout MUST leave the slot unconfirmed; U-Boot attempt accounting
     then determines rollback.
   - The application health signal used for mark-good MUST be the /healthz contract in C-RUNTIME-002.
+  implementation_status:
+  - epilykos-mark-good.service runs after multi-user.target and calls rauc status mark-good only when /data is mounted, podman
+    info succeeds and the epilykos container reports healthy (/healthz). Network, Bluetooth and inverters are not checked.
+    Timeout 1200 s (proposed); on timeout the slot stays unconfirmed.
   evidence:
   - systemd dependency graph
   - epilykos-health-gate.service test
@@ -235,6 +253,12 @@ contracts:
   - The epilykos systemd user manager MUST start at boot without an interactive login.
   - Required OCI images MUST be preloaded before first normal boot.
   - Image pull behavior MUST be explicit and MUST NOT make boot network-dependent.
+  implementation_status:
+  - 'Interim deviation: the Tier 1 image runs Podman rootful (crun, cgroup v2, overlay storage on /data/containers/storage)
+    and the container itself runs the app as uid 1000, not as a host root process. Rootless operation under the epilykos service
+    account waits on D-RUNTIME-001 (UID/GID and subuid ranges) and the Stage 3 D-Bus spike.'
+  - The pinned Epilykos image (linux/arm64) is preloaded in the rootfs as an OCI archive and loaded into storage on first
+    boot without network.
   evidence:
   - id epilykos
   - /etc/subuid and /etc/subgid
@@ -278,6 +302,10 @@ contracts:
     commit fabfa89.
   - Uploads use TMPDIR (os.tmpdir()) instead of a hard-coded /tmp — app commit fabfa89.
   - Read-only container root still requires the Stage 2 write audit before the SHOULD becomes enforceable.
+  - 'Buildroot''s Podman 5.7 is built without the Quadlet generator, so the image ships epilykos.service plus a launcher script
+    (epilykos-run) with the options a Quadlet would render: image by build-time image ID derived from the manifest digest,
+    LOG_TO_FILE=false, SQLITE_SYNCHRONOUS=FULL, /app/data from /data/epilykos/app-data, tmpfs /tmp with TMPDIR, --sdnotify=healthy,
+    health check on /healthz with a 180 s start period. make contracts checks the launcher.'
 - id: C-RUNTIME-003
   title: Bluetooth access for the Epilykos container
   stage: 3
@@ -290,6 +318,13 @@ contracts:
   - 'Test order (on the Tier 1 board): rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged;
     direct HCI capabilities only if necessary.'
   - The final D-Bus policy and device/capability set MUST be committed as code and regression-tested.
+  implementation_status:
+  - 'Tier 1 image: the onboard BCM43438 comes up through the mainline device tree''s serdev node on the PL011 (hci_uart +
+    hci_bcm, BCM43430A1.hcd from brcmfmac_sdio-firmware-rpi); bluetoothd is enabled; the container gets /run/dbus read-only
+    and no capabilities. BlueZ 5.79''s default D-Bus policy already lets non-root callers reach org.bluez.'
+  - The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port 3000 of
+    the box and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3
+    spike.
   evidence:
   - Stage 3 BLE hardware test report
   - Static Quadlet scan
@@ -854,6 +889,17 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.5.3-draft
+  changes:
+  - 'EpilykosOS Tier 1 image moves to AArch64: the application images are published for linux/amd64 and linux/arm64
+    only, so the 32-bit userland could not run them.'
+  - 'Boot fix from the first hardware boot: root=LABEL= needs an initramfs and panicked the kernel; boot.cmd now boots
+    root=PARTUUID with a fixed disk signature and passes rauc.slot=. Layout is four primary MBR partitions; U-Boot
+    environment moved from a FAT file to two raw redundant copies (C-BOOT-001, C-BOOT-002 implementation status).'
+  - 'Image now carries networking (systemd-networkd DHCP, mDNS as epilykos.local), Bluetooth (BlueZ, onboard BCM43438 via
+    the mainline serdev node and its firmware), and the Epilykos service with its image preloaded (C-RUNTIME-001,
+    C-RUNTIME-002 implementation status). mark-good gates on C-BOOT-003 conditions.'
+  - 'make contracts also checks the appliance launcher (os/board/*/rootfs-overlay/usr/bin/epilykos-run).'
 - version: 0.5.2-draft
   changes:
   - 'Bluetooth moved into the epilykos container (application dev): the bms-bridge sidecar and irunmole/epilykos-bms image

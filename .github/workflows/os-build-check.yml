@@ -30,8 +30,7 @@ jobs:
           for f in os/build.sh \
                    os/board/epilykos/raspberrypi3/post-build.sh \
                    os/board/epilykos/raspberrypi3/post-image.sh \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-data-init \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-mark-good; do
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/*; do
             echo "sh -n $f"
             sh -n "$f"
           done
@@ -41,8 +40,7 @@ jobs:
           for f in os/build.sh \
                    os/board/epilykos/raspberrypi3/post-build.sh \
                    os/board/epilykos/raspberrypi3/post-image.sh \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-data-init \
-                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-mark-good; do
+                   os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/*; do
             test -x "$f" || { echo "$f is not executable"; exit 1; }
           done
       - name: Every path a defconfig/genimage references exists in-tree
@@ -52,17 +50,31 @@ jobs:
           for rel in board/epilykos/raspberrypi3/linux.fragment \
                      board/epilykos/raspberrypi3/config.txt \
                      board/epilykos/raspberrypi3/boot.cmd \
-                     board/epilykos/raspberrypi3/uboot.env \
+                     board/epilykos/raspberrypi3/uboot.fragment \
                      board/epilykos/raspberrypi3/rootfs-overlay \
                      board/epilykos/raspberrypi3/post-build.sh \
                      board/epilykos/raspberrypi3/post-image.sh \
                      board/epilykos/raspberrypi3/genimage.cfg; do
             test -e "os/$rel" || { echo "missing os/$rel"; exit 1; }
           done
-      - name: systemd service enable symlinks resolve
+      - name: Units and presets
         run: |
           set -e
-          for link in $(find os/board/epilykos/raspberrypi3/rootfs-overlay/etc/systemd -type l); do
-            target="os/board/epilykos/raspberrypi3/rootfs-overlay$(readlink "$link")"
-            test -e "$target" || { echo "$link -> $(readlink "$link") does not resolve to $target"; exit 1; }
+          OVERLAY=os/board/epilykos/raspberrypi3/rootfs-overlay
+          # Buildroot runs `systemctl preset-all` after copying the overlay,
+          # which deletes hand-made enable symlinks; units are enabled
+          # through the preset file instead.
+          if find "$OVERLAY/etc/systemd/system" -name '*.wants' 2>/dev/null | grep -q .; then
+            echo "enable units via $OVERLAY/usr/lib/systemd/system-preset, not .wants symlinks"; exit 1
+          fi
+          for unit in "$OVERLAY"/usr/lib/systemd/system/epilykos*.service; do
+            name=$(basename "$unit")
+            grep -qx "enable $name" "$OVERLAY"/usr/lib/systemd/system-preset/50-epilykos.preset \
+              || { echo "$name is not enabled in 50-epilykos.preset"; exit 1; }
+            for cmd in $(sed -n 's/^Exec[A-Za-z]*=-\{0,1\}\(\/usr\/bin\/epilykos[^ ]*\).*/\1/p' "$unit"); do
+              test -x "$OVERLAY$cmd" || { echo "$name runs $cmd, which is not in the overlay"; exit 1; }
+            done
           done
+          systemd-analyze verify --man=no "$OVERLAY"/usr/lib/systemd/system/epilykos*.service 2>&1 \
+            | grep -v 'is not executable\|bluetooth.service\|rauc.service\|podman' | tee verify.log
+          test ! -s verify.log

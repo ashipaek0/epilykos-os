@@ -1,0 +1,28 @@
+#!/bin/sh
+# Grow DATA (partition 4, the last one) and its ext4 filesystem to fill
+# the SD card. The image ships DATA as a small empty filesystem because
+# card sizes vary (D-STORAGE-001); this runs on every boot and does
+# nothing once DATA already reaches the end of the card.
+#
+# Runs with DATA mounted: the partition-table edit uses --no-reread and
+# partx to tell the kernel, and ext4 grows online.
+set -e
+
+PART_DEV=$(readlink -f /dev/disk/by-partuuid/45504c4b-04)
+PART=$(basename "${PART_DEV}")
+DISK=$(basename "$(readlink -f "/sys/class/block/${PART}/..")")
+NUM=$(cat "/sys/class/block/${PART}/partition")
+
+disk_end=$(cat "/sys/class/block/${DISK}/size")
+part_end=$(( $(cat "/sys/class/block/${PART}/start") + $(cat "/sys/class/block/${PART}/size") ))
+
+# Less than 16 MiB left over: already grown (or the card is that small).
+if [ $(( disk_end - part_end )) -gt 32768 ]; then
+	echo "epilykos-data-grow: growing /dev/${PART} to the end of /dev/${DISK}"
+	echo ", +" | sfdisk --no-reread --no-tell-kernel -N "${NUM}" "/dev/${DISK}"
+	partx -u -n "${NUM}" "/dev/${DISK}"
+fi
+
+# No-op when the filesystem already fills the partition; also finishes a
+# grow that was interrupted after the partition step.
+resize2fs "${PART_DEV}"

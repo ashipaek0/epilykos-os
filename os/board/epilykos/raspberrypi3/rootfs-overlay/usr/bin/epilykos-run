@@ -1,0 +1,52 @@
+#!/bin/sh
+# Start the Epilykos container. Called by epilykos.service; the options
+# mirror what a Quadlet would generate (C-RUNTIME-002), written as a
+# script because Buildroot's Podman is built without the Quadlet
+# generator.
+#
+# - Image: the exact image ID this OS build preloaded (image.env), never
+#   a tag, so nothing is pulled and nothing can drift.
+# - Host network: the app listens on port 3000 of the box itself
+#   (http://epilykos.local:3000) and Tuya LAN discovery works.
+# - Bluetooth: the host's BlueZ over the system D-Bus socket, no BlueZ in
+#   the container, no privileged mode (C-RUNTIME-003).
+# - Serial adapters present at start (ttyUSB*/ttyACM*) are passed in,
+#   with the host dialout group so the app user can open them.
+set -e
+. /usr/lib/epilykos/image.env
+
+DIALOUT_GID=$(awk -F: '$1 == "dialout" { print $3 }' /etc/group)
+
+set -- \
+	--name epilykos \
+	--cidfile=/run/epilykos.cid \
+	--replace --rm -d \
+	--cgroups=split \
+	--sdnotify=healthy \
+	--log-driver=journald \
+	--network=host \
+	--stop-timeout=30 \
+	--memory=640m \
+	--oom-score-adj=500 \
+	--tmpfs /tmp:rw,size=64m,mode=1777 \
+	--volume /data/epilykos/app-data:/app/data \
+	--volume /run/dbus:/run/dbus:ro \
+	--volume /etc/localtime:/etc/localtime:ro \
+	--env TMPDIR=/tmp \
+	--env LOG_TO_FILE=false \
+	--env SQLITE_SYNCHRONOUS=FULL \
+	--env NODE_OPTIONS=--max-old-space-size=384 \
+	--health-cmd "node -e \"fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))\"" \
+	--health-interval=30s \
+	--health-timeout=5s \
+	--health-retries=3 \
+	--health-start-period=180s
+
+if [ -n "${DIALOUT_GID}" ]; then
+	set -- "$@" --group-add "${DIALOUT_GID}"
+fi
+for dev in /dev/ttyUSB* /dev/ttyACM*; do
+	[ -e "${dev}" ] && set -- "$@" --device "${dev}"
+done
+
+exec podman run "$@" "${EPILYKOS_IMAGE_ID}"

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Make sure the Epilykos image this OS build pins is in Podman's storage
+# (on DATA). The image ships inside the rootfs as an OCI archive
+# (post-build.sh), so this never needs the network (C-DATA-002). It is a
+# no-op once the image is present, which is every boot after the first
+# boot of each OS slot.
+set -e
+. /usr/lib/epilykos/image.env
+
+if podman image exists "${EPILYKOS_IMAGE_ID}"; then
+	exit 0
+fi
+
+echo "epilykos-image-load: loading ${EPILYKOS_IMAGE_REF} (${EPILYKOS_RELEASE}) from ${EPILYKOS_IMAGE_ARCHIVE}"
+podman load --quiet --input "${EPILYKOS_IMAGE_ARCHIVE}"
+
+podman image exists "${EPILYKOS_IMAGE_ID}" || {
+	echo "epilykos-image-load: archive loaded but image ${EPILYKOS_IMAGE_ID} is not in storage" >&2
+	exit 1
+}

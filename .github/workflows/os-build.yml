@@ -3,9 +3,10 @@ name: OS image build
 # The real thing: a from-scratch Buildroot build of EpilykosOS for a
 # real board (os/build.sh). This is NOT the fast structural lint in
 # os-build-check.yml — a cold run can take well over an hour even with
-# caching, so it does not run on every pull request. It runs on demand,
-# and on pushes to dev/main that touch the build tree (i.e. once a
-# change like this actually merges).
+# caching, so it does not run on every pull request or on dev. It runs on
+# demand (Actions -> OS image build -> Run workflow, on any branch), and on
+# pushes to main that touch the build tree, i.e. when a stable release is
+# promoted from dev.
 #
 # What "passing" means here: the image built, Buildroot's own genimage
 # step assembled a partition-correct sdcard.img, and a few structural
@@ -22,7 +23,7 @@ on:
         required: false
         default: raspberrypi3
   push:
-    branches: [dev, main]
+    branches: [main]
     paths:
       - 'os/**'
       - '.github/workflows/os-build.yml'

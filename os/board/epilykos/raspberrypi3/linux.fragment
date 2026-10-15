@@ -80,7 +80,7 @@ CONFIG_OVERLAY_FS=y
 CONFIG_FUSE_FS=y
 
 # zram is the only swap C-RESOURCE-001 allows.
-CONFIG_ZRAM=y
+CONFIG_ZRAM=m
 
 # -- Trim SoC families this board is not. Their drivers depend on these
 # symbols, so this removes hundreds of modules and a good share of the

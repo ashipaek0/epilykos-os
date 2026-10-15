@@ -73,25 +73,44 @@ jobs:
             libssl-dev libncurses-dev device-tree-compiler \
             genimage mtools dosfstools e2fsprogs skopeo
 
-      - name: Cache Buildroot package downloads
-        uses: actions/cache@v4
+      # Restore/save as separate steps so the caches are kept even when the
+      # build fails: a failure ~80 minutes in shouldn't make the retry start
+      # from nothing (actions/cache only saves on success).
+      - name: Restore Buildroot package downloads
+        id: dl-cache
+        uses: actions/cache/restore@v4
         with:
           path: os/build/dl
           key: os-dl-${{ hashFiles('os/configs/epilykos_raspberrypi3_defconfig', 'os/board/epilykos/raspberrypi3/linux.fragment', 'os/board/epilykos/raspberrypi3/uboot.fragment') }}
           restore-keys: |
             os-dl-
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.buildroot-ccache
-          key: os-ccache-${{ runner.os }}-${{ env.BOARD }}-${{ hashFiles('os/configs/epilykos_raspberrypi3_defconfig', 'os/board/epilykos/raspberrypi3/linux.fragment', 'os/board/epilykos/raspberrypi3/uboot.fragment') }}
+          key: os-ccache-${{ runner.os }}-${{ env.BOARD }}-${{ github.run_id }}
           restore-keys: |
             os-ccache-${{ runner.os }}-${{ env.BOARD }}-
             os-ccache-${{ runner.os }}-
 
       - name: Build
         run: os/build.sh "${BOARD}"
+
+      - name: Save Buildroot package downloads
+        if: always() && steps.dl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: os/build/dl
+          key: ${{ steps.dl-cache.outputs.cache-primary-key }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Structural checks on the produced image
         run: |

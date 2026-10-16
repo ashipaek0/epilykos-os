@@ -19,15 +19,23 @@ REPO_DIR="$(cd "${BOARD_DIR}/../../../.." && pwd)"
 CHANNEL="${EPILYKOS_CHANNEL:-dev}"
 MANIFEST="${REPO_DIR}/manifests/${CHANNEL}.yaml"
 
-# DATA is the only persistent read-write filesystem every slot mounts.
+# The root filesystem stays read-only (C-BOOT-001) and is checked at
+# boot. DATA is the only persistent read-write filesystem every slot
+# mounts; it is checked and repaired at boot (fsck.repair=yes, boot.cmd).
 # Both are addressed by PARTUUID (fixed disk signature, genimage.cfg).
 # BOOT is mounted read-only and only for inspection, so it must not be
-# able to fail the boot.
+# able to fail the boot. The bind mounts put the state that must survive
+# a reboot on DATA; epilykos-data-layout creates their sources first.
 mkdir -p "${TARGET_DIR}/data" "${TARGET_DIR}/boot"
+DATA_BIND="none    bind,x-systemd.requires=epilykos-data-layout.service,x-systemd.after=epilykos-data-layout.service"
 cat > "${TARGET_DIR}/etc/fstab" <<-FSTAB
 	# <file system>              <mount point>  <type>  <options>                <dump> <pass>
+	/dev/root                    /              auto    ro                       0      1
 	PARTUUID=45504c4b-04         /data          ext4    defaults,noatime         0      2
 	PARTUUID=45504c4b-01         /boot          vfat    ro,nofail                0      0
+	/data/journal                /var/log/journal           ${DATA_BIND} 0 0
+	/data/bluetooth              /var/lib/bluetooth         ${DATA_BIND} 0 0
+	/data/timesync               /var/lib/systemd/timesync  ${DATA_BIND} 0 0
 FSTAB
 
 # -- Preloaded application image --

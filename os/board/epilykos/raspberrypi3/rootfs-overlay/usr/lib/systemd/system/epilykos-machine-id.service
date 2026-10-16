@@ -1,0 +1,11 @@
+[Unit]
+Description=EpilykosOS: keep the machine ID across reboots
+After=local-fs.target
+ConditionPathExists=/etc/fw_env.config
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/epilykos-machine-id
+
+[Install]
+WantedBy=multi-user.target

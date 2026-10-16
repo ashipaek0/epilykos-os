@@ -45,6 +45,13 @@ own partition layout).
   | p3 ROOT-B | `45504c4b-03` | root filesystem, slot B |
   | p4 DATA | `45504c4b-04` | `/data`, grown to fill the card on first boot |
 
+- Power cuts: ROOT-A and ROOT-B are mounted read-only and never written
+  in normal operation; `/var` is a tmpfs. What has to survive a reboot
+  lives on DATA, which is checked and repaired at boot: the app's data,
+  Podman's storage, Wi-Fi networks, Bluetooth pairings, the last known
+  time and the journal (64 MB cap, so `journalctl -b -1` shows the
+  previous boot). The machine ID is kept in the U-Boot environment. Swap
+  is 256 MB of compressed RAM (zram), never the SD card.
 - Networking: DHCP on wired Ethernet and Wi-Fi (Ethernet preferred when
   both are up), reachable as `epilykos.local` (mDNS). Wi-Fi is iwd; known
   networks are kept on DATA (`/data/iwd`) so they survive OS updates.
@@ -129,6 +136,8 @@ os/
     wifi-example.txt                      Wi-Fi template placed on BOOT
     rootfs-overlay/                       files copied onto the built rootfs:
                                             systemd units + presets, epilykos-run,
+                                            DATA-backed state (epilykos-data-layout,
+                                            fstab binds), machine ID, zram,
                                             RAUC system.conf, fw_env.config,
                                             network/mDNS, iwd, Podman storage,
                                             Wi-Fi setup (epilykos-wifi-import,

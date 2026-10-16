@@ -3,7 +3,10 @@
 # anything not listed here (or in systemd's 90-systemd.preset, which
 # already enables networkd, resolved and timesyncd) is left off. Enable
 # symlinks dropped into the overlay by hand do not survive that step.
+enable epilykos-data-layout.service
 enable epilykos-data-grow.service
+enable epilykos-machine-id.service
+enable epilykos-zram.service
 enable epilykos.service
 enable epilykos-mark-good.service
 enable bluetooth.service

@@ -173,9 +173,20 @@ jobs:
           WANTS=$(enabled multi-user.target.wants)
           for u in epilykos.service epilykos-mark-good.service epilykos-data-grow.service \
                    systemd-networkd.service iwd.service epilykos-wifi-import.service \
-                   epilykos-improv.service; do
+                   epilykos-improv.service epilykos-machine-id.service; do
             echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
+          enabled local-fs.target.wants | grep -qx epilykos-data-layout.service || { echo "epilykos-data-layout.service is not enabled in rootfs.ext4"; exit 1; }
+          enabled swap.target.wants | grep -qx epilykos-zram.service || { echo "epilykos-zram.service is not enabled in rootfs.ext4"; exit 1; }
+
+          # Read-only root (C-BOOT-001): fstab keeps / read-only, the boot
+          # script passes ro, and /var is the tmpfs Buildroot fills from
+          # its factory copy.
+          grep -Eq '^/dev/root[[:space:]]+/[[:space:]]+auto[[:space:]]+ro[[:space:]]' "$TARGET_DIR/etc/fstab" || { echo "fstab does not mount / read-only"; exit 1; }
+          grep -q ' ro fsck.repair=yes' os/board/epilykos/raspberrypi3/boot.cmd || { echo "boot.cmd does not boot read-only"; exit 1; }
+          # var.mount is added on the filesystem's own copy of the target
+          # directory, like the enable links: read it from the image.
+          debugfs -R "stat /usr/lib/systemd/system/var.mount" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | grep -q '^Inode:' || { echo "no tmpfs /var for the read-only root"; exit 1; }
           enabled bluetooth.target.wants | grep -qx bluetooth.service || { echo "bluetooth.service is not enabled in rootfs.ext4"; exit 1; }
           enabled getty.target.wants | grep -qx 'serial-getty@ttyS1.service' || { echo "no serial console login in rootfs.ext4"; exit 1; }
 
@@ -279,7 +290,7 @@ jobs:
           # QEMU's mini-UART clock setup can differ from the real firmware's.
           timeout 900 qemu-system-aarch64 -M raspi3b -m 1G \
             -kernel Image -dtb bcm2837-rpi-3-b.dtb \
-            -append "root=PARTUUID=45504c4b-02 rauc.slot=A rootfstype=ext4 rootwait rw console=ttyS1,115200 earlycon=pl011,mmio32,0x3f201000 keep_bootcon systemd.journald.forward_to_kmsg=1 systemd.log_target=kmsg" \
+            -append "root=PARTUUID=45504c4b-02 rauc.slot=A rootfstype=ext4 rootwait ro fsck.repair=yes console=ttyS1,115200 earlycon=pl011,mmio32,0x3f201000 keep_bootcon systemd.journald.forward_to_kmsg=1 systemd.log_target=kmsg" \
             -drive if=sd,format=raw,file=sdcard-kernel.img \
             -serial file:kernel-uart0.log -serial file:kernel-uart1.log \
             -display none -no-reboot &
@@ -298,5 +309,6 @@ jobs:
           echo "$LOG" | grep -qiE "kernel panic|Oops" && { echo "::error::kernel panicked"; fail=1; }
           echo "$LOG" | grep -qE "EXT4-fs \(mmcblk[0-9]p2\): mounted|VFS: Mounted root" || { echo "::error::ROOT-A (PARTUUID=45504c4b-02) was not mounted"; fail=1; }
           echo "$LOG" | grep -qE "Reached target .*Multi-User|login:" || { echo "::error::systemd did not reach multi-user"; fail=1; }
+          echo "$LOG" | grep -q "Mounted root (ext4 filesystem) readonly" || { echo "::error::the root filesystem was not mounted read-only"; fail=1; }
           echo "$LOG" | grep -E "Failed to start|FAILED" | head -20
           exit $fail

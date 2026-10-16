@@ -15,7 +15,9 @@ EnvironmentFile=/usr/lib/epilykos/image.env
 TimeoutStartSec=20min
 ExecStartPre=/usr/bin/epilykos-image-load
 ExecStart=/usr/bin/epilykos-run
-ExecStop=/usr/bin/podman rm -v -f -i --cidfile=/run/epilykos.cid
+# SIGTERM first, with time for the app to close its database (which
+# checkpoints the SQLite WAL) before anything is killed (C-HOST-001).
+ExecStop=/usr/bin/podman stop --ignore --time=30 --cidfile=/run/epilykos.cid
 ExecStopPost=-/usr/bin/podman rm -v -f -i --cidfile=/run/epilykos.cid
 Type=notify
 NotifyAccess=all

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Keep one machine ID across reboots on a read-only root (C-BOOT-001).
+#
+# With nothing written to /etc, systemd makes up a new machine ID on each
+# boot, so the persistent journal would start a new directory every time
+# and `journalctl -b -1` would show nothing. On the first boot this saves
+# the ID into the U-Boot environment (two redundant copies on the card);
+# boot.cmd passes it back as systemd.machine_id= on every later boot.
+set -eu
+id=$(cat /etc/machine-id)
+saved=$(fw_printenv -n machine_id 2>/dev/null || true)
+if [ "$saved" = "$id" ]; then
+	exit 0
+fi
+case "$id" in
+	*[!0-9a-f]* | "") echo "epilykos-machine-id: unusable machine ID" >&2; exit 1 ;;
+esac
+fw_setenv machine_id "$id"
+echo "epilykos-machine-id: saved machine ID for later boots"

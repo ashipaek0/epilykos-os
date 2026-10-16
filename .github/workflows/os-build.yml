@@ -362,7 +362,9 @@ jobs:
           echo "$LOG" | grep -E "Failed to start|FAILED" | head -20
           # RAUC confirms the slot (C-BOOT-003); without it every boot counts
           # down the slot's attempts.
-          echo "$LOG" | grep -q "Failed to start RAUC Update Service" && { echo "::error::rauc.service failed"; echo "$LOG" | grep -iE "rauc" | head -40; fail=1; }
+          echo "$LOG" | grep -qE "Failed to start RAUC Update Service|rauc\.service: Failed with result|rauc\[[0-9]+\]: Failed to" && { echo "::error::rauc.service failed"; echo "$LOG" | grep -iE "rauc" | head -40; fail=1; }
+          # Every EpilykosOS service must start (radio-less QEMU or not).
+          echo "$LOG" | grep -E "epilykos[a-z-]*\.service: Failed with result|Failed to start EpilykosOS" && { echo "::error::an EpilykosOS service failed"; fail=1; }
           exit $fail
 
   # A new version of main, or a release you created: put the SD card image on

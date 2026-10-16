@@ -84,7 +84,14 @@ run('invalid contract status', lambda r: r['contracts'][0].update(status='done')
 run('decision blocks unknown contract', lambda r: r['decisions_required'][0]['blocks'].append('C-NOPE-001'), expect='blocks unknown contract')
 run('decision hidden from stage 0 review', lambda r: r['decisions_required'][0].update(stage0_review_required=False), expect='Stage 0 review')
 run('unresolved names unknown decision', lambda r: r['contracts'][0].setdefault('unresolved', []).append('D-NOPE-999'), expect='unknown decision D-NOPE-999')
-run('releasable stage with open decision', lambda r: r['metadata'].update(releasable_stages=[0]), expect='marked releasable')
+def reopen_stage0_decision(r):
+    d = next(d for d in r['decisions_required'] if d['due_stage'] == 0)
+    d['status'] = 'open'
+    d.pop('resolution', None)
+    r['metadata']['releasable_stages'] = [0]
+
+
+run('releasable stage with open decision', reopen_stage0_decision, expect='marked releasable')
 run('privileged quadlet without exception', files={'quadlets/bms-bridge.container': '[Container]\nPrivileged=true\n'}, expect='Privileged=true')
 run('epilykos quadlet without LOG_TO_FILE=false',
     files={'quadlets/epilykos.container': GOOD_QUADLET.replace('Environment=LOG_TO_FILE=false\n', '')}, expect='LOG_TO_FILE=false')

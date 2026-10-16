@@ -1,0 +1,188 @@
+#!/usr/bin/python3
+"""The narrow host interface the Epilykos container uses for system actions
+(C-HOST-001): Restart, Shut down, Change Wi-Fi, and the SSH controls.
+
+Listens on /run/epilykos-host/host.sock, which only root and the
+container's app user (gid 1000) can open; the container sees the same
+directory. One JSON request per line, one JSON reply per line:
+
+    {"action": "status"}
+    {"action": "restart"} | {"action": "shutdown"}
+    {"action": "wifi_setup"}                    open Bluetooth Wi-Fi setup for 15 min
+    {"action": "ssh_enable"} | {"action": "ssh_disable"}
+    {"action": "ssh_set_password", "password": "..."}
+    {"action": "ssh_clear_password"}
+    {"action": "ssh_add_key", "key": "ssh-ed25519 AAAA... name"}
+    {"action": "ssh_remove_key", "fingerprint": "SHA256:..."}
+
+Replies are {"ok": true, ...} or {"ok": false, "error": "..."}. Only these
+actions exist; nothing else on the host can be reached through it. The
+application checks that the caller is a signed-in administrator before
+it asks. Passwords are never logged.
+"""
+import json
+import os
+import socketserver
+import subprocess
+import sys
+import threading
+import time
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_ssh as ssh  # noqa: E402
+
+SOCKET = os.environ.get('EPILYKOS_HOST_SOCKET', '/run/epilykos-host/host.sock')
+RUN_DIR = os.environ.get('EPILYKOS_RUN_DIR', '/run/epilykos')
+SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
+APP_GID = int(os.environ.get('EPILYKOS_APP_GID', '1000'))
+WIFI_SETUP_S = 15 * 60
+MAX_REQUEST = 16 * 1024
+
+
+def log(msg):
+    print(f'epilykos-hostd: {msg}', flush=True)
+
+
+def systemctl(*args):
+    subprocess.run([SYSTEMCTL, '--no-block', *args], check=False)
+
+
+def os_version():
+    try:
+        with open('/usr/lib/epilykos/image.env') as f:
+            for line in f:
+                if line.startswith('EPILYKOS_OS_VERSION='):
+                    return line.split('=', 1)[1].strip()
+    except OSError:
+        pass
+    return ''
+
+
+def wifi_setup_until():
+    try:
+        with open(os.path.join(RUN_DIR, 'wifi-setup-until')) as f:
+            until = float(f.read().strip())
+        return int(until) if until > time.time() else 0
+    except (OSError, ValueError):
+        return 0
+
+
+def later(fn, delay=1.0):
+    """Run fn after the reply has gone out (restart/shutdown)."""
+    threading.Timer(delay, fn).start()
+
+
+def sshd_restart():
+    ssh.write_shadow()
+    if ssh.is_enabled():
+        systemctl('restart', 'epilykos-sshd.service')
+
+
+def handle(req):
+    action = req.get('action')
+    if action == 'status':
+        return {'ok': True, 'appliance': True, 'os_version': os_version(),
+                'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status()}
+    if action == 'restart':
+        log('restart requested from Epilykos settings')
+        later(lambda: systemctl('reboot'))
+        return {'ok': True}
+    if action == 'shutdown':
+        log('shutdown requested from Epilykos settings')
+        later(lambda: systemctl('poweroff'))
+        return {'ok': True}
+    if action == 'wifi_setup':
+        until = int(time.time()) + WIFI_SETUP_S
+        os.makedirs(RUN_DIR, exist_ok=True)
+        with open(os.path.join(RUN_DIR, 'wifi-setup-until'), 'w') as f:
+            f.write(f'{until}\n')
+        log('Wi-Fi setup over Bluetooth opened from Epilykos settings for 15 minutes')
+        return {'ok': True, 'wifi_setup_until': until}
+    if action == 'ssh_enable':
+        ssh.set_enabled(True)
+        systemctl('start', 'epilykos-sshd.service')
+        log('SSH turned on from Epilykos settings')
+        return {'ok': True, 'ssh': ssh.status()}
+    if action == 'ssh_disable':
+        ssh.set_enabled(False)
+        systemctl('stop', 'epilykos-sshd.service')
+        log('SSH turned off from Epilykos settings')
+        return {'ok': True, 'ssh': ssh.status()}
+    if action == 'ssh_set_password':
+        ssh.set_password_hash(ssh.hash_password(req.get('password')))
+        ssh.write_shadow()
+        log('SSH password set from Epilykos settings')
+        return {'ok': True, 'ssh': ssh.status()}
+    if action == 'ssh_clear_password':
+        ssh.clear_password()
+        ssh.write_shadow()
+        log('SSH password cleared from Epilykos settings')
+        return {'ok': True, 'ssh': ssh.status()}
+    if action == 'ssh_add_key':
+        fp = ssh.add_key(req.get('key'))
+        log(f'SSH key {fp} added from Epilykos settings')
+        return {'ok': True, 'ssh': ssh.status()}
+    if action == 'ssh_remove_key':
+        ssh.remove_key(str(req.get('fingerprint', '')))
+        log(f'SSH key {req.get("fingerprint")} removed from Epilykos settings')
+        return {'ok': True, 'ssh': ssh.status()}
+    return {'ok': False, 'error': 'unknown action'}
+
+
+class Handler(socketserver.StreamRequestHandler):
+    timeout = 10
+
+    def handle(self):
+        line = self.rfile.readline(MAX_REQUEST + 1)
+        if len(line) > MAX_REQUEST:
+            reply = {'ok': False, 'error': 'request too large'}
+        else:
+            try:
+                req = json.loads(line or b'{}')
+                if not isinstance(req, dict):
+                    raise ValueError('not an object')
+                reply = handle(req)
+            except ssh.SshError as e:
+                reply = {'ok': False, 'error': str(e)}
+            except (ValueError, UnicodeError):
+                reply = {'ok': False, 'error': 'malformed request'}
+            except OSError as e:
+                log(f'{type(e).__name__}: {e.strerror or e}')
+                reply = {'ok': False, 'error': 'the host could not do that'}
+        self.wfile.write(json.dumps(reply).encode() + b'\n')
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def notify_ready():
+    addr = os.environ.get('NOTIFY_SOCKET')
+    if not addr:
+        return
+    if addr.startswith('@'):
+        addr = '\0' + addr[1:]
+    import socket
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+        s.sendto(b'READY=1', addr)
+
+
+def main():
+    os.makedirs(os.path.dirname(SOCKET), exist_ok=True)
+    try:
+        os.unlink(SOCKET)
+    except FileNotFoundError:
+        pass
+    server = Server(SOCKET, Handler)
+    try:
+        os.chown(SOCKET, 0, APP_GID)
+    except PermissionError:
+        pass  # tests run unprivileged
+    os.chmod(SOCKET, 0o660)
+    log(f'listening on {SOCKET}')
+    notify_ready()
+    server.serve_forever()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

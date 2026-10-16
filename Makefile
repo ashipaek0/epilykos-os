@@ -16,3 +16,4 @@ test:
 	$(PYTHON) tools/test_validate_contracts.py
 	$(PYTHON) tools/test_sync_app_release.py
 	$(PYTHON) tools/test_wifi_provisioning.py
+	$(PYTHON) tools/test_host_actions.py

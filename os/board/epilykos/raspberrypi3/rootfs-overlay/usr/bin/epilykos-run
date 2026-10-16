@@ -31,6 +31,8 @@ set -- \
 	--tmpfs /tmp:rw,size=64m,mode=1777 \
 	--volume /data/epilykos/app-data:/app/data \
 	--volume /run/dbus:/run/dbus:ro \
+	--volume /run/epilykos-host:/run/epilykos-host \
+	--env EPILYKOS_HOST_SOCKET=/run/epilykos-host/host.sock \
 	--volume /etc/localtime:/etc/localtime:ro \
 	--env TMPDIR=/tmp \
 	--env LOG_TO_FILE=false \

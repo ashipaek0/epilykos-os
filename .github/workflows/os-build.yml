@@ -173,11 +173,26 @@ jobs:
           WANTS=$(enabled multi-user.target.wants)
           for u in epilykos.service epilykos-mark-good.service epilykos-data-grow.service \
                    systemd-networkd.service iwd.service epilykos-wifi-import.service \
-                   epilykos-improv.service epilykos-machine-id.service; do
+                   epilykos-improv.service epilykos-machine-id.service \
+                   epilykos-hostd.service epilykos-sshd.service; do
             echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
           enabled local-fs.target.wants | grep -qx epilykos-data-layout.service || { echo "epilykos-data-layout.service is not enabled in rootfs.ext4"; exit 1; }
           enabled swap.target.wants | grep -qx epilykos-zram.service || { echo "epilykos-zram.service is not enabled in rootfs.ext4"; exit 1; }
+          enabled sysinit.target.wants | grep -qx epilykos-shadow.service || { echo "epilykos-shadow.service is not enabled in rootfs.ext4"; exit 1; }
+          if enabled multi-user.target.wants | grep -qx sshd.service; then echo "the stock sshd.service must stay disabled (C-ACCESS-001)"; exit 1; fi
+
+          # SSH maintenance login (C-ACCESS-001): sshd and sudo present, the
+          # epilykos user exists, root can never log in over SSH.
+          test -x "$TARGET_DIR/usr/sbin/sshd" && test -x "$TARGET_DIR/usr/bin/ssh-keygen" || { echo "OpenSSH server or ssh-keygen missing"; exit 1; }
+          # Users and setuid bits are applied on the filesystem's own copy
+          # of the target directory: read them from the image.
+          debugfs -R "stat /usr/bin/sudo" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | grep -Eq 'Mode: +04755' || { echo "sudo missing or not setuid"; exit 1; }
+          IMG_PASSWD=$(debugfs -R "cat /etc/passwd" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null)
+          echo "$IMG_PASSWD" | grep -q '^epilykos:x:1000:1000:' || { echo "user epilykos (1000) missing"; exit 1; }
+          echo "$IMG_PASSWD" | grep -q '^sshd:' || { echo "sshd privilege-separation user missing"; exit 1; }
+          grep -qx 'PermitRootLogin no' "$TARGET_DIR/etc/ssh/sshd_config" || { echo "sshd_config allows root login"; exit 1; }
+          grep -qx '@includedir /etc/sudoers.d' "$TARGET_DIR/etc/sudoers" || { echo "sudoers does not read sudoers.d"; exit 1; }
 
           # Read-only root (C-BOOT-001): fstab keeps / read-only, the boot
           # script passes ro, and /var is the tmpfs Buildroot fills from

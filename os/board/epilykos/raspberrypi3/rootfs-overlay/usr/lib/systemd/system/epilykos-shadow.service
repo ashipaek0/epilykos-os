@@ -1,0 +1,14 @@
+[Unit]
+Description=EpilykosOS: SSH password from DATA (shadow copy over the read-only /etc/shadow)
+DefaultDependencies=no
+RequiresMountsFor=/data
+After=local-fs.target
+Before=sysinit.target epilykos-sshd.service epilykos-hostd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/epilykos-ssh shadow
+
+[Install]
+WantedBy=sysinit.target

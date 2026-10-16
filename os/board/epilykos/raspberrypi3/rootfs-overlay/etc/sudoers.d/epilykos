@@ -1,0 +1,4 @@
+# The SSH maintenance user (C-ACCESS-001). Only an administrator can let
+# anyone log in as epilykos, and a key-only login has no password to give
+# sudo, so sudo doesn't ask for one.
+epilykos ALL=(ALL:ALL) NOPASSWD: ALL

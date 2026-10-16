@@ -1,0 +1,16 @@
+# EpilykosOS SSH maintenance login (C-ACCESS-001). Off unless turned on in
+# Epilykos settings; then user epilykos logs in with a password and/or a
+# public key, both kept on DATA. Root can never log in over SSH.
+HostKey /data/ssh/ssh_host_ed25519_key
+AllowUsers epilykos
+PermitRootLogin no
+AuthorizedKeysFile /data/ssh/authorized_keys
+PubkeyAuthentication yes
+PasswordAuthentication yes
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+MaxAuthTries 4
+LoginGraceTime 30
+X11Forwarding no
+PidFile /run/sshd/sshd.pid
+Subsystem sftp /usr/libexec/sftp-server

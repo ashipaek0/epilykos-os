@@ -7,6 +7,9 @@ enable epilykos-data-layout.service
 enable epilykos-data-grow.service
 enable epilykos-machine-id.service
 enable epilykos-zram.service
+enable epilykos-shadow.service
+enable epilykos-hostd.service
+enable epilykos-sshd.service
 enable epilykos.service
 enable epilykos-mark-good.service
 enable bluetooth.service
@@ -14,8 +17,9 @@ enable rauc.service
 enable systemd-networkd.service
 enable systemd-resolved.service
 enable systemd-timesyncd.service
-# Console logins: the header serial port and the HDMI screen. There is no
-# SSH (C-ACCESS-001).
+# Console logins: the header serial port and the HDMI screen. SSH
+# (epilykos-sshd, above) only runs once turned on in Epilykos settings
+# (C-ACCESS-001); the stock sshd.service stays disabled.
 enable serial-getty@.service ttyS1
 enable getty@.service tty1
 # Wi-Fi and its setup paths (BOOT files, Bluetooth).

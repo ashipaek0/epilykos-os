@@ -38,6 +38,12 @@ cat > "${TARGET_DIR}/etc/fstab" <<-FSTAB
 	/data/timesync               /var/lib/systemd/timesync  ${DATA_BIND} 0 0
 FSTAB
 
+# sudo reads the epilykos rule from /etc/sudoers.d (C-ACCESS-001); the
+# drop-in must not be group- or world-writable.
+grep -q '^@includedir /etc/sudoers.d' "${TARGET_DIR}/etc/sudoers" ||
+	echo '@includedir /etc/sudoers.d' >> "${TARGET_DIR}/etc/sudoers"
+chmod 0440 "${TARGET_DIR}/etc/sudoers.d/epilykos"
+
 # -- Preloaded application image --
 test -f "${MANIFEST}" || { echo "post-build: no manifest ${MANIFEST}" >&2; exit 1; }
 

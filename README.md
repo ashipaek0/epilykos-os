@@ -1,37 +1,29 @@
 # EpilykosOS
 
-EpilykosOS is a dedicated operating system for running [Epilykos](https://github.com/ashipaek0/epilykos) on a Raspberry Pi. You flash it, power it on and finish setup from a browser. From then on it runs, updates and recovers by itself, like an appliance.
+EpilykosOS turns a Raspberry Pi into an [Epilykos](https://github.com/ashipaek0/epilykos) energy monitor. Flash it to an SD card, power it on, and use the dashboard from any browser on your network.
 
 ## Hardware
 
-| Board | Support |
-|---|---|
-| Raspberry Pi 3B | Tested |
-| Raspberry Pi 4, Raspberry Pi 5 | Best effort, built on proven upstream board support |
+- A Raspberry Pi 3B (the Pi 4 and Pi 5 are planned, best effort)
+- A microSD card, 32 GB or larger
+- Ethernet or Wi-Fi
 
-## Features
+## Getting started
 
 **Setup with no terminal**
 - Plug in Ethernet, or give it your Wi-Fi from your phone over Bluetooth, add wifi credentials via Raspberry Pi Imager's settings, or with a small wifi.txt file in the boot partition of the SD card.
 - Then open `http://epilykos.local:3000` in a browser.
 - The site time zone is set during setup, so daily totals and forecasts follow local time.
 
-**Reliable operation**
-- The system partition is read-only. Your data is kept on a separate persistent partition.
-- Epilykos is included in the image, so it starts even when there is no network.
-- The application runs in a rootless container. Bluetooth (battery BMS and inverter modules) is handled inside it through the host's BlueZ, with only the device access it needs.
-- The database is tuned to lose as little data as possible if the power is cut.
-- Logs go to the system journal and don't wear out the SD card.
+## What it does
 
 **Safe updates**
 - Application updates are separate from OS updates and can be rolled back on their own.
 - Every application image is pinned by digest.
 
-**Secure by default**
-- SSH is off by default. When it is enabled, it accepts keys only, with no password or root login.
-- Verified boot is available as an option.
+Planned: automatic, signed updates with rollback for both the system and the app.
 
-## Releases
+## For developers
 
 | Channel | Branch | Contents |
 |---|---|---|

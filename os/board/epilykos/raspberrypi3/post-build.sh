@@ -59,6 +59,10 @@ manifest_value() {
 	' "${MANIFEST}"
 }
 RELEASE=$(awk '$1 == "release:" { print $2; exit }' "${MANIFEST}")
+SEQUENCE=$(awk '$1 == "sequence:" { print $2; exit }' "${MANIFEST}")
+case "${SEQUENCE}" in
+	''|*[!0-9]*) echo "post-build: no sequence in ${MANIFEST}" >&2; exit 1 ;;
+esac
 DIGEST=$(manifest_value digest)
 SOURCE=$(manifest_value source)
 case "${DIGEST}" in
@@ -104,9 +108,22 @@ cat > "${APP_DIR}/image.env" <<-ENV
 	# Written at image build time by post-build.sh from manifests/${CHANNEL}.yaml.
 	EPILYKOS_CHANNEL=${CHANNEL}
 	EPILYKOS_RELEASE=${RELEASE}
+	EPILYKOS_SEQUENCE=${SEQUENCE}
 	EPILYKOS_IMAGE_REF=${REF}
 	EPILYKOS_IMAGE_ID=${IMAGE_ID}
 	EPILYKOS_IMAGE_ARCHIVE=/usr/lib/epilykos/epilykos.oci.tar
 	EPILYKOS_OS_VERSION=${OS_VERSION}
 ENV
 echo "post-build: Epilykos image ${IMAGE_ID} preloaded"
+
+# Application updates from Epilykos settings (C-UPDATE-004, D-UPDATE-001)
+# accept only manifests signed with the application-release key. Its
+# public half is pinned here; without it the box keeps its preloaded image.
+PUBKEY="${REPO_DIR}/keys/app-manifest.pub"
+if [ -f "${PUBKEY}" ]; then
+	install -m 0644 "${PUBKEY}" "${APP_DIR}/app-manifest.pub"
+	echo "post-build: app update key pinned"
+else
+	rm -f "${APP_DIR}/app-manifest.pub"
+	echo "post-build: no keys/app-manifest.pub; app updates from settings are off in this image"
+fi

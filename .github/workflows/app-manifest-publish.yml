@@ -1,0 +1,57 @@
+# Publish the merged application manifest for appliances (C-UPDATE-004,
+# D-UPDATE-001). Merging the app-sync pull request is the trust decision;
+# this signs exactly what was merged with the application-release key and
+# puts manifest.json + manifest.json.sig on the GitHub release app-<channel>,
+# where Settings -> Updates on each appliance checks (epilykos_update).
+#
+# Needs the APP_MANIFEST_SIGNING_KEY secret (keys/README.md). Without it the
+# job says so and publishes nothing: appliances then keep what they have.
+name: App manifest publish
+
+on:
+  push:
+    branches: [dev, main]
+    paths: ['manifests/*.yaml', 'keys/app-manifest.pub']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-manifest-publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml==6.0.2
+
+      - name: Sign and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_KEY: ${{ secrets.APP_MANIFEST_SIGNING_KEY }}
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then channel=stable; else channel=dev; fi
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::APP_MANIFEST_SIGNING_KEY is not set; the $channel manifest was not published (see keys/README.md)"
+            exit 0
+          fi
+          test -f keys/app-manifest.pub || { echo "::error::keys/app-manifest.pub is missing"; exit 1; }
+          umask 077
+          key="$RUNNER_TEMP/app-manifest.key"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          APP_MANIFEST_SIGNING_KEY_FILE="$key" python3 tools/sign_app_manifest.py "manifests/$channel.yaml" out
+          rm -f "$key"
+          tag="app-$channel"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
+              --title "Epilykos app ($channel)" \
+              --notes "Signed application manifest for $channel appliances. Updated on every merged release; appliances check it from Settings → Updates."
+          fi
+          gh release upload "$tag" out/manifest.json out/manifest.json.sig --clobber

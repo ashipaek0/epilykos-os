@@ -441,6 +441,11 @@ contracts:
         source: string
       bms-bridge: optional, legacy releases only — {digest, source}
     sequence: integer >= 1, monotonically increasing across promoted releases
+  implementation_status:
+  - 'epilykos_update (used by epilykos-hostd): pulls the signed candidate by digest, starts it through active.env on DATA,
+    promotes it only when epilykos.service reports healthy (current/previous/floor on /data/epilykos/updater), otherwise
+    restores the previous image; the boot slot is never touched. An update cut short is rolled back at the next hostd start.
+    epilykos-run starts active.env only when its sequence is at least the slot''s preloaded one. tools/test_app_update.py.'
 - id: C-UPDATE-003
   title: Independent rollback behavior
   stage: 5
@@ -658,6 +663,8 @@ contracts:
     it MUST NOT gain general root access to the host.
   - 'The application''s first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator
     password.'
+  - Settings MUST also check for and install application updates through the same interface (update_status, update_check,
+    update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
   evidence:
   - 'Restart and shutdown from the dashboard: clean journal shutdown, no fsck repair on the next boot'
   - Unauthenticated request rejected
@@ -938,8 +945,9 @@ decisions_required:
   due_stage: 5
   stage0_review_required: true
   status: resolved
-  resolution: 'Signed manifests. CI signs each application release manifest with an Ed25519 key held in the application repository''s
-    secrets, separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator
+  resolution: 'Signed manifests. CI signs each application release manifest with an Ed25519 key held in this repository''s
+    secrets (APP_MANIFEST_SIGNING_KEY), after the manifest pull request is merged, so the signature covers exactly what the
+    human trust decision accepted; separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator
     approves it, or automatically if enabled. Delivery: online check against the GitHub release, dashboard upload, or USB
     stick.'
 test_fixture_notes:
@@ -960,6 +968,9 @@ decision_governance:
 changelog:
 - version: 0.6.0-draft
   changes:
+  - 'C-HOST-001: application updates from Epilykos settings (update_status, update_check, update_apply); C-UPDATE-002
+    implementation in epilykos_update. D-UPDATE-001: the signing key is held in epilykos-os, which signs after the merge,
+    not in the application repository, so CI cannot sign a release no one has accepted.'
   - 'All fourteen open decisions resolved (2026-10-16): D-BOOT-001, D-BOOT-002, D-STORAGE-001, D-RECOVERY-001, D-PROV-001,
     D-TIME-001, D-RELEASE-001, D-RESOURCE-001, D-RUNTIME-001, D-BLE-001, D-ACCESS-001, D-LOG-001, D-SQLITE-001, D-UPDATE-001.'
   - 'C-BOOT-001: ROOT-A/B read-only and DATA repaired at boot, after power cuts damaged partitions on the first hardware

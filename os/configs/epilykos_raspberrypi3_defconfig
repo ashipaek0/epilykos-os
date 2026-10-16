@@ -137,6 +137,16 @@ BR2_PACKAGE_PODMAN=y
 BR2_PACKAGE_CRUN=y
 BR2_PACKAGE_FUSE_OVERLAYFS=y
 
+# -- Application updates from Epilykos settings (C-UPDATE-002/004) --
+# The openssl tool verifies the Ed25519 manifest signature; Python's ssl
+# module and the CA bundle let hostd fetch the manifest and Podman pull
+# the image over HTTPS.
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_LIBOPENSSL=y
+BR2_PACKAGE_LIBOPENSSL_BIN=y
+BR2_PACKAGE_PYTHON3_SSL=y
+BR2_PACKAGE_CA_CERTIFICATES=y
+
 # -- Wi-Fi (C-PROV-001/002) --
 # iwd joins the networks; systemd-networkd configures the address (and
 # mDNS) the same way as on Ethernet. readline enables iwctl for the

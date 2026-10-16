@@ -471,6 +471,10 @@ images:
 sequence: integer >= 1, monotonically increasing across promoted releases
 ```
 
+**Implementation status**
+
+- epilykos_update (used by epilykos-hostd): pulls the signed candidate by digest, starts it through active.env on DATA, promotes it only when epilykos.service reports healthy (current/previous/floor on /data/epilykos/updater), otherwise restores the previous image; the boot slot is never touched. An update cut short is rolled back at the next hostd start. epilykos-run starts active.env only when its sequence is at least the slot's preloaded one. tools/test_app_update.py.
+
 **Required evidence**
 
 - Schema validation test
@@ -717,6 +721,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - Settings MUST also offer "Change Wi-Fi" (C-PROV-002) and the SSH controls (C-ACCESS-001).
 - The container MUST reach these host actions through one narrow host interface that accepts only these named actions; it MUST NOT gain general root access to the host.
 - The application's first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator password.
+- Settings MUST also check for and install application updates through the same interface (update_status, update_check, update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
 
 **Required evidence**
 
@@ -817,7 +822,7 @@ This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `
 | `D-BOOT-001` | 4 | `resolved` | `C-BOOT-002` | Freeze U-Boot boot-attempt counts and environment storage/redundancy. **Resolved:** 3 boot attempts per slot (RAUC boot-attempts and boot-attempts-primary = 3). U-Boot environment raw on the SD card at 4 MiB and 4 MiB + 16 KiB, two redundant 16 KiB copies, matched by /etc/fw_env.config. |
 | `D-LOG-001` | 4 | `resolved` | `C-LOG-001` | Freeze persistent journal storage cap. **Resolved:** Persistent journal on DATA, capped at 64 MB (SystemMaxUse=64M). |
 | `D-SQLITE-001` | 4 | `resolved` | `C-DATA-003` | Freeze SQLite synchronous mode and periodic quick_check cadence. Current application default is NORMAL (explicit since app commit fabfa89). **Resolved:** synchronous=FULL on the appliance (SQLITE_SYNCHRONOUS=FULL). PRAGMA quick_check runs after every unclean shutdown and weekly, outside the boot-health gate. |
-| `D-UPDATE-001` | 5 | `resolved` | `C-UPDATE-004` | Freeze the application-manifest authenticity model: signed manifest with pinned application-release trust anchor, or pinned/verified source plus authenticated per-candidate user approval; define v1 delivery paths. **Resolved:** Signed manifests. CI signs each application release manifest with an Ed25519 key held in the application repository's secrets, separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator approves it, or automatically if enabled. Delivery: online check against the GitHub release, dashboard upload, or USB stick. |
+| `D-UPDATE-001` | 5 | `resolved` | `C-UPDATE-004` | Freeze the application-manifest authenticity model: signed manifest with pinned application-release trust anchor, or pinned/verified source plus authenticated per-candidate user approval; define v1 delivery paths. **Resolved:** Signed manifests. CI signs each application release manifest with an Ed25519 key held in this repository's secrets (APP_MANIFEST_SIGNING_KEY), after the manifest pull request is merged, so the signature covers exactly what the human trust decision accepted; separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator approves it, or automatically if enabled. Delivery: online check against the GitHub release, dashboard upload, or USB stick. |
 
 ## 8. CI contract
 
@@ -913,6 +918,7 @@ The architecture is ready for implementation when all Stage 0 decisions are froz
 
 ### 0.6.0-draft
 
+- C-HOST-001: application updates from Epilykos settings (update_status, update_check, update_apply); C-UPDATE-002 implementation in epilykos_update. D-UPDATE-001: the signing key is held in epilykos-os, which signs after the merge, not in the application repository, so CI cannot sign a release no one has accepted.
 - All fourteen open decisions resolved (2026-10-16): D-BOOT-001, D-BOOT-002, D-STORAGE-001, D-RECOVERY-001, D-PROV-001, D-TIME-001, D-RELEASE-001, D-RESOURCE-001, D-RUNTIME-001, D-BLE-001, D-ACCESS-001, D-LOG-001, D-SQLITE-001, D-UPDATE-001.
 - C-BOOT-001: ROOT-A/B read-only and DATA repaired at boot, after power cuts damaged partitions on the first hardware test; sizes frozen (32 GB minimum card).
 - C-ACCESS-001: SSH stays off by default but now supports password and key login for user epilykos; keys are supplied, not generated.

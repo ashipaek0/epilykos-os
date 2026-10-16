@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """The narrow host interface the Epilykos container uses for system actions
-(C-HOST-001): Restart, Shut down, Change Wi-Fi, and the SSH controls.
+(C-HOST-001): Restart, Shut down, Change Wi-Fi, the SSH controls, and
+application updates (C-UPDATE-002/004, epilykos_update).
 
 Listens on /run/epilykos-host/host.sock, which only root and the
 container's app user (gid 1000) can open; the container sees the same
@@ -14,6 +15,9 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "ssh_clear_password"}
     {"action": "ssh_add_key", "key": "ssh-ed25519 AAAA... name"}
     {"action": "ssh_remove_key", "fingerprint": "SHA256:..."}
+    {"action": "update_status"}                 installing? how did the last update end?
+    {"action": "update_check"}                  is a newer signed app release out?
+    {"action": "update_apply", "target": "app"} install it (replies at once, then works)
 
 Replies are {"ok": true, ...} or {"ok": false, "error": "..."}. Only these
 actions exist; nothing else on the host can be reached through it. The
@@ -30,6 +34,7 @@ import time
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_ssh as ssh  # noqa: E402
+import epilykos_update as update  # noqa: E402
 
 SOCKET = os.environ.get('EPILYKOS_HOST_SOCKET', '/run/epilykos-host/host.sock')
 RUN_DIR = os.environ.get('EPILYKOS_RUN_DIR', '/run/epilykos')
@@ -126,11 +131,19 @@ def handle(req):
         ssh.remove_key(str(req.get('fingerprint', '')))
         log(f'SSH key {req.get("fingerprint")} removed from Epilykos settings')
         return {'ok': True, 'ssh': ssh.status()}
+    if action == 'update_status':
+        return update.status()
+    if action == 'update_check':
+        return update.check()
+    if action == 'update_apply':
+        target = str(req.get('target', 'app'))
+        log(f'{target} update requested from Epilykos settings')
+        return update.apply(target)
     return {'ok': False, 'error': 'unknown action'}
 
 
 class Handler(socketserver.StreamRequestHandler):
-    timeout = 10
+    timeout = 60  # update_check fetches the signed manifest
 
     def handle(self):
         line = self.rfile.readline(MAX_REQUEST + 1)
@@ -142,7 +155,7 @@ class Handler(socketserver.StreamRequestHandler):
                 if not isinstance(req, dict):
                     raise ValueError('not an object')
                 reply = handle(req)
-            except ssh.SshError as e:
+            except (ssh.SshError, update.UpdateError) as e:
                 reply = {'ok': False, 'error': str(e)}
             except (ValueError, UnicodeError):
                 reply = {'ok': False, 'error': 'malformed request'}
@@ -179,6 +192,12 @@ def main():
     except PermissionError:
         pass  # tests run unprivileged
     os.chmod(SOCKET, 0o660)
+    # Before epilykos.service starts: an update cut short goes back to the
+    # last promoted image.
+    try:
+        update.recover()
+    except OSError as e:
+        log(f'update recovery: {e}')
     log(f'listening on {SOCKET}')
     notify_ready()
     server.serve_forever()

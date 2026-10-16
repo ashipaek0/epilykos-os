@@ -203,13 +203,15 @@ jobs:
           # not in output/target: read them from the image.
           enabled() { debugfs -R "ls /etc/systemd/system/$1" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | tr -s ' ' '\n'; }
           WANTS=$(enabled multi-user.target.wants)
-          for u in epilykos.service epilykos-mark-good.service epilykos-data-grow.service \
+          for u in epilykos.service epilykos-mark-good.service \
                    systemd-networkd.service iwd.service epilykos-wifi-import.service \
                    epilykos-improv.service epilykos-machine-id.service \
                    epilykos-hostd.service epilykos-sshd.service; do
             echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
-          enabled local-fs.target.wants | grep -qx epilykos-data-layout.service || { echo "epilykos-data-layout.service is not enabled in rootfs.ext4"; exit 1; }
+          for u in epilykos-data-layout.service epilykos-data-grow.service; do
+            enabled local-fs.target.wants | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
+          done
           enabled swap.target.wants | grep -qx epilykos-zram.service || { echo "epilykos-zram.service is not enabled in rootfs.ext4"; exit 1; }
           enabled sysinit.target.wants | grep -qx epilykos-shadow.service || { echo "epilykos-shadow.service is not enabled in rootfs.ext4"; exit 1; }
           if enabled multi-user.target.wants | grep -qx sshd.service; then echo "the stock sshd.service must stay disabled (C-ACCESS-001)"; exit 1; fi

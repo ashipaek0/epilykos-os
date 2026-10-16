@@ -333,11 +333,13 @@ jobs:
         run: |
           set +e
           # The command line boot.scr builds, plus the kernel log mirrored to
-          # the PL011 (keep_bootcon) and service logs forwarded to it, because
-          # QEMU's mini-UART clock setup can differ from the real firmware's.
+          # the PL011 (keep_bootcon), because QEMU's mini-UART clock setup can
+          # differ from the real firmware's. Service logs go straight to the
+          # console: the image keeps the kernel log level at warnings, which
+          # would hide them if they were forwarded through the kernel log.
           timeout 900 qemu-system-aarch64 -M raspi3b -m 1G \
             -kernel Image -dtb bcm2837-rpi-3-b.dtb \
-            -append "root=PARTUUID=45504c4b-02 rauc.slot=A rootfstype=ext4 rootwait ro fsck.repair=yes console=ttyS1,115200 earlycon=pl011,mmio32,0x3f201000 keep_bootcon systemd.journald.forward_to_kmsg=1 systemd.log_target=kmsg" \
+            -append "root=PARTUUID=45504c4b-02 rauc.slot=A rootfstype=ext4 rootwait ro fsck.repair=yes console=ttyS1,115200 earlycon=pl011,mmio32,0x3f201000 keep_bootcon systemd.journald.forward_to_console=1 systemd.journald.max_level_console=info systemd.log_target=console" \
             -drive if=sd,format=raw,file=sdcard-kernel.img \
             -serial file:kernel-uart0.log -serial file:kernel-uart1.log \
             -display none -no-reboot &
@@ -358,6 +360,9 @@ jobs:
           echo "$LOG" | grep -qE "Reached target .*Multi-User|login:" || { echo "::error::systemd did not reach multi-user"; fail=1; }
           echo "$LOG" | grep -q "Mounted root (ext4 filesystem) readonly" || { echo "::error::the root filesystem was not mounted read-only"; fail=1; }
           echo "$LOG" | grep -E "Failed to start|FAILED" | head -20
+          # RAUC confirms the slot (C-BOOT-003); without it every boot counts
+          # down the slot's attempts.
+          echo "$LOG" | grep -q "Failed to start RAUC Update Service" && { echo "::error::rauc.service failed"; echo "$LOG" | grep -iE "rauc" | head -40; fail=1; }
           exit $fail
 
   # A new version of main, or a release you created: put the SD card image on

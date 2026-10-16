@@ -51,8 +51,8 @@ done
 if test -n "${bootargs}"; then
   saveenv
 else
-  # Both slots used up their attempts. There is no recovery target yet
-  # (D-RECOVERY-001 is open); this is RAUC's reference behaviour:
+  # Both slots used up their attempts. v1 has no recovery target
+  # (D-RECOVERY-001); this is RAUC's reference behaviour:
   # give both slots their attempts back and start over.
   echo "EpilykosOS: no slot has attempts left; resetting both to 3"
   setenv BOOT_A_LEFT 3

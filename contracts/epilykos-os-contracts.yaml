@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.5.3-draft
+  version: 0.6.0-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -111,16 +111,21 @@ contracts:
 - id: C-BOOT-001
   title: Partition map
   stage: 0
-  status: decision-required
+  status: draft
   requirements:
   - Both developer and appliance images MUST use GPT and the same ordered partition topology.
   - Required labels are BOOT, ROOT-A, ROOT-B, DATA.
   - RECOVERY is conditional and MUST NOT be added until D-RECOVERY-001 is resolved.
   - ROOT-A and ROOT-B MUST be equal size.
+  - 'Sizes and filesystems are frozen by D-STORAGE-001: BOOT 128 MiB FAT32, ROOT-A and ROOT-B 1536 MiB ext4 each, DATA ext4
+    filling the rest of a card of at least 32 GB.'
   - DATA MUST be a separate persistent filesystem and MUST survive OS slot switches and application rollbacks.
-  - Exact partition sizes are intentionally unresolved by architecture v0.5 and MUST be frozen before Stage 0 closes.
   - 'The Tier 1 v1 boot medium is the microSD card: USB mass-storage boot on the original Pi 3B requires a one-time OTP setting
     and MUST NOT be assumed. Tier 2 boards MAY use USB or NVMe media supported by their upstream board support.'
+  - ROOT-A and ROOT-B MUST be mounted read-only in normal operation, so cutting power cannot damage the OS. Only DATA, the
+    redundant U-Boot environment and, for the moment a provisioning file is removed, BOOT are ever written.
+  - DATA MUST be checked and repaired automatically at boot (fsck -p semantics); a DATA check failure MUST NOT stop the box
+    from booting to a state where the dashboard reports the problem.
   implementation_status:
   - 'Tier 1 image (os/, 0.5.3-draft): four primary MBR partitions — BOOT (FAT32), ROOT-A and ROOT-B (equal size), DATA — with
     a fixed disk signature (0x45504c4b) so every partition has a stable PARTUUID. Filesystem labels BOOT, ROOT-A, ROOT-B,
@@ -132,6 +137,7 @@ contracts:
   - parted -s <image> unit B print
   - blkid output from first boot
   - CI assertion that developer/appliance partition tables are identical
+  - 'Repeated power cuts during writes: ROOT stays clean (fsck -n) and DATA is repaired at boot'
 - id: C-BOOT-002
   title: U-Boot / RAUC bootchooser variables
   stage: 4
@@ -203,8 +209,8 @@ contracts:
   stage: 2
   status: draft
   requirements:
-  - Rootless Podman persistent graph storage MUST be under /data/containers.
-  - Ephemeral Podman runtime state MUST remain under /run/user/<uid>/ and MAY be lost on reboot.
+  - Podman persistent graph storage MUST be under /data/containers.
+  - Ephemeral Podman runtime state MUST remain under /run and MAY be lost on reboot.
   - OCI image storage MUST survive OS A/B slot switches.
   - The appliance MUST NOT need to pull an OCI image during normal boot.
   evidence:
@@ -213,7 +219,7 @@ contracts:
 - id: C-DATA-003
   title: SQLite durability configuration
   stage: 4
-  status: decision-required
+  status: draft
   requirements:
   - SQLite MUST remain in WAL mode unless a measured power-loss test justifies a different mode.
   - The SQLite synchronous mode MUST be explicitly selected and recorded; architecture v0.5 does not freeze the value.
@@ -230,27 +236,26 @@ contracts:
     database size plus the retained snapshots (see D-STORAGE-001).
   - Power-cut testing MUST run on the Tier 1 board with the recommended microSD card class. Documentation MUST recommend a
     high-endurance card and state the expected write volume per day so wear can be estimated.
+  - The appliance sets SQLITE_SYNCHRONOUS=FULL (D-SQLITE-001). PRAGMA quick_check MUST run after every unclean shutdown and
+    weekly; its result is reported in the dashboard and diagnostics, never used as a boot-health condition.
   evidence:
   - PRAGMA journal_mode
   - PRAGMA synchronous
   - mount output
   - Power-cut test report
   - Snapshot restore test
-  unresolved:
-  - Exact PRAGMA synchronous value
-  - Periodic quick_check cadence
   implementation_status:
   - SQLITE_SYNCHRONOUS (NORMAL default = previous implicit value; FULL/EXTRA allowed; OFF refused) and METRIC_FLUSH_INTERVAL_MS
     exported — app commit fabfa89.
 - id: C-RUNTIME-001
-  title: Rootless Podman host contract
+  title: Podman host contract
   stage: 2
   status: draft
   requirements:
-  - Service account MUST be epilykos with a fixed UID/GID frozen in the image source.
-  - subuid/subgid ranges MUST be fixed at image build time.
-  - The host MUST use cgroup v2, crun, and netavark.
-  - The epilykos systemd user manager MUST start at boot without an interactive login.
+  - Podman runs rootful for v1 (D-RUNTIME-001); the application inside the Epilykos container MUST run as uid/gid 1000, not
+    as root.
+  - The host MUST use cgroup v2, crun, and netavark or host networking.
+  - The Epilykos service MUST start at boot without an interactive login.
   - Required OCI images MUST be preloaded before first normal boot.
   - Image pull behavior MUST be explicit and MUST NOT make boot network-dependent.
   implementation_status:
@@ -260,14 +265,9 @@ contracts:
   - The pinned Epilykos image (linux/arm64) is preloaded in the rootfs as an OCI archive and loaded into storage on first
     boot without network.
   evidence:
-  - id epilykos
-  - /etc/subuid and /etc/subgid
+  - podman inspect epilykos (User 1000:1000)
   - podman info
-  - loginctl show-user epilykos
   - Offline boot test
-  unresolved:
-  - Fixed UID/GID numbers
-  - Fixed subuid/subgid ranges
 - id: C-RUNTIME-002
   title: Epilykos Quadlet
   stage: 2
@@ -342,7 +342,7 @@ contracts:
 - id: C-RESOURCE-001
   title: Memory and storage budget on Tier 1
   stage: 2
-  status: decision-required
+  status: draft
   requirements:
   - The complete appliance (host services including BlueZ, Podman, Epilykos with its Bluetooth helper, journald) MUST run
     steady-state on the 1 GB Tier 1 board with the free-memory headroom frozen by D-RESOURCE-001.
@@ -353,19 +353,19 @@ contracts:
     and MUST restart automatically.
   - Storage growth (database, snapshots, journal) MUST be bounded or monitored so DATA cannot silently fill on the Tier 1
     medium.
+  - 'Frozen budget (D-RESOURCE-001): container memory limit 640 MB, Node.js heap cap 384 MB, zram swap 256 MB (zstd), at least
+    100 MB free memory steady-state on Tier 1.'
   evidence:
   - '72-hour soak on Tier 1 with active polling: memory, swap and OOM-event timeline'
   - podman inspect showing memory limits and NODE_OPTIONS
   - Forced-leak test showing the container restarts and the host stays healthy
-  unresolved:
-  - D-RESOURCE-001
 - id: C-RELEASE-001
   title: Release channels and image provenance
   stage: 2
   status: draft
   requirements:
-  - Both repositories use dev as the integration branch and main for stable releases only; main is updated by merging from
-    dev after review.
+  - Both repositories use dev as the integration branch and main for stable releases only; only the maintainer merges dev
+    into main (D-RELEASE-001).
   - Every application image build MUST publish a digest record {service, image, digest, tag, commit, ref}; the record, not
     the tag, is the input to manifests.
   - 'Stable application manifests (channel: stable) MUST reference only digests whose record has ref main (I-009).'
@@ -376,6 +376,9 @@ contracts:
     the manifest sequence remains the only ordering primitive (C-UPDATE-002).
   - Mutable tags (latest, dev) MAY be used to discover a build but MUST be resolved to a recorded digest before any manifest
     or image preload references it.
+  - 'Merging dev into main in the application repository is the release: CI MUST then tag vX.Y.Z, publish the digest records,
+    update and merge the stable application manifest in epilykos-os, and build the stable OS image, with no further manual
+    step. A failing check at any step stops the release there.'
   evidence:
   - Digest-record artifacts from the application build workflows (main and dev)
   - Manifest provenance check output for each stable release
@@ -454,7 +457,7 @@ contracts:
 - id: C-UPDATE-004
   title: Application manifest delivery and trust
   stage: 5
-  status: decision-required
+  status: draft
   requirements:
   - The appliance MUST NOT accept an application candidate merely because its OCI images are digest-pinned; the manifest authorizing
     those digests MUST itself arrive through an authenticated or explicitly user-approved trust path.
@@ -481,6 +484,8 @@ contracts:
   - Automatic rollback to the internally retained previous-known-good manifest is not treated as accepting an old external
     manifest and MUST remain possible without lowering the stored release-sequence floor.
   - A failed candidate that is never promoted MUST NOT advance the stored highest promoted release sequence.
+  - 'Frozen model (D-UPDATE-001): Ed25519-signed manifests verified against a public key pinned in the OS image, with a key
+    separate from the RAUC release CA. Delivery paths: online check against the GitHub release, dashboard upload, USB stick.'
   evidence:
   - USB manifest delivery test
   - Authenticated local upload/push test
@@ -522,13 +527,14 @@ contracts:
   evidence:
   - Clean-flash Ethernet-only test from a separate client
 - id: C-PROV-002
-  title: Wi-Fi AP provisioning
+  title: Wi-Fi provisioning without a network
   stage: 1
   status: draft
   requirements:
-  - If no usable network is configured, a temporary provisioning AP/captive portal MUST be available according to the first-boot
-    state machine.
-  - Re-entry after initial provisioning MUST require the defined physical recovery gesture.
+  - If no usable network is configured, Wi-Fi setup over Bluetooth LE (the open Improv Wi-Fi protocol) MUST be available,
+    together with the wifi.txt / Raspberry Pi Imager files on BOOT.
+  - After initial provisioning, Wi-Fi setup MUST reopen only through an authenticated "Change Wi-Fi" action in Epilykos settings
+    (for 15 minutes) or automatically after 2 minutes without a network address (D-PROV-001).
   - Provisioning credentials and secrets MUST not be written to logs or diagnostics bundles.
   implementation_status:
   - 'Wi-Fi without a terminal, three ways: (1) wifi.txt on the BOOT partition (template wifi-example.txt ships there); (2)
@@ -542,12 +548,9 @@ contracts:
   - 'Secrets: imported BOOT files are deleted after import; credentials are stored only in iwd network files (0600) on DATA;
     no setup path logs a password (covered by tools/test_wifi_provisioning.py and tools/test_improv_dbus.py).'
   evidence:
-  - Clean-flash Wi-Fi-only provisioning test
-  - Recovery-gesture re-entry test
+  - Clean-flash Wi-Fi-only provisioning test (file on BOOT, and over Bluetooth)
+  - 'Re-entry test: dashboard action, and network loss'
   - Secret-redaction test
-  unresolved:
-  - Exact physical/GPIO recovery gesture
-  - AP SSID naming and credential policy
 - id: C-PROV-003
   title: USB Ethernet gadget provisioning
   stage: 1
@@ -565,40 +568,37 @@ contracts:
 - id: C-RECOVERY-001
   title: Slot exhaustion behavior
   stage: 5
-  status: decision-required
+  status: draft
   requirements:
   - Behavior when both ROOT-A and ROOT-B are unbootable MUST be deterministic and tested.
   - If a RECOVERY boot target is retained, U-Boot MUST select it; the normal initramfs MUST NOT own slot-selection policy.
   - If RECOVERY is deferred from v1, the v1 manual recovery procedure MUST be documented and tested before release.
+  - 'v1 has no RECOVERY target (D-RECOVERY-001). The documented manual procedure is: reflash the card and restore a dashboard
+    backup in the setup wizard; the dashboard MUST make downloading a backup easy and SHOULD remind the user to keep one.'
   evidence:
   - Both-slots-bad hardware test
   - Recovery/reflash runbook validation
-  unresolved:
-  - 'D-RECOVERY-001: include dedicated recovery partition in v1 or defer'
 - id: C-ACCESS-001
   title: SSH maintenance access
   stage: 4
-  status: decision-required
+  status: draft
   requirements:
-  - SSH MUST be disabled by default in the appliance image.
-  - Developer-image SSH policy MAY differ, but MUST be explicit and MUST NOT weaken the appliance default.
-  - Enabling SSH on an appliance MUST require an explicit authenticated administrator action through the local Epilykos settings
-    workflow; provisioning MUST NOT require SSH.
-  - When SSH is enabled through the appliance dashboard, the appliance MUST generate the SSH keypair as part of that workflow
-    rather than requiring the installer to pre-supply a public key.
-  - Password authentication MUST remain disabled and root login MUST remain disabled.
-  - Generated private-key material MUST NOT appear in logs, diagnostics bundles, backups, telemetry, or application manifests.
-  - The key lifecycle — private-key delivery/export, persistent storage if any, rotation, revocation, and behavior when SSH
-    is disabled again — MUST be frozen before Stage 4 closes.
+  - SSH MUST be disabled by default in the appliance image; provisioning MUST NOT require SSH.
+  - SSH is enabled by an authenticated administrator action in Epilykos settings, or at first boot by Raspberry Pi Imager's
+    SSH settings or an authorized_keys file on BOOT (D-ACCESS-001).
+  - 'Login is the non-root user epilykos (with sudo). Password authentication and public-key authentication are both supported:
+    the password is set in the dashboard or by Imager; public keys are added in the dashboard, by Imager or from BOOT. The
+    appliance does not generate keypairs.'
+  - Root login MUST remain disabled. With no password and no key configured, SSH MUST NOT accept any login.
+  - Password hashes and authorized keys live on DATA; turning SSH off stops the server and keeps them; the dashboard can remove
+    each key and clear the password.
+  - Credentials MUST NOT appear in logs, diagnostics bundles, telemetry, or application manifests.
   evidence:
   - Fresh appliance image test showing SSH unavailable by default
-  - Authenticated settings workflow test enabling SSH and generating a keypair
-  - Key-only non-root login success test
-  - Password login and root login rejection tests
+  - Settings workflow test enabling SSH, setting a password and adding a key
+  - Password and key login as epilykos; root login rejected
   - Disable/re-enable lifecycle test
-  - Secret-redaction test covering generated key material
-  unresolved:
-  - 'D-ACCESS-001: freeze generated-key private-key delivery/storage, rotation, revocation, and disable semantics'
+  - Secret-redaction test
 - id: C-TIME-001
   title: Clock and synchronization
   stage: 1
@@ -616,14 +616,13 @@ contracts:
   - Stored timestamps are UTC epoch seconds; correcting the clock MUST NOT rewrite stored history.
   - The host MUST expose clock-synchronization state to the application in a documented, read-only form so the dashboard can
     show it.
+  - 'Frozen implementation (D-TIME-001): systemd-timesyncd, NTP servers from DHCP then pool.ntp.org; sync state reaches the
+    container as a read-only file.'
   evidence:
   - Cold boot without network
   - NTP recovery test
   - 'Tier 1 cold boot without network: clock is not earlier than the last shutdown and is flagged unsynchronised'
   - RTC retention test on a board or module with a backup battery (best effort)
-  unresolved:
-  - Exact NTP implementation and server policy
-  - Host-to-application clock-sync status interface
   implementation_status:
   - Application follows TZ, else /etc/localtime; /healthz reports time and time zone.
   - 'Gap: the application has no input for host clock-sync state yet; the host interface is defined by D-TIME-001.'
@@ -637,16 +636,32 @@ contracts:
   - Diagnostics export MUST include journal, container status, RAUC status, boot-slot metadata, kernel version, hardware enumeration,
     redacted network state, application version/digests, and database status.
   - Diagnostics export MUST redact credentials, tokens, private keys, Wi-Fi PSKs, and application secrets.
+  - The persistent journal cap is 64 MB (D-LOG-001).
   evidence:
   - Journal persistence across A/B switch
   - Storage-cap test
   - Diagnostics bundle content test
   - Secret-redaction test
-  unresolved:
-  - Exact journal size cap
   implementation_status:
   - 'Application: LOG_TO_FILE=false gives stdout/stderr only; ANSI colours only on a TTY; per-request HTTP logs are below
     the default level — app commit fabfa89.'
+- id: C-HOST-001
+  title: Dashboard system actions
+  stage: 2
+  status: draft
+  requirements:
+  - Epilykos settings MUST offer Restart and Shut down for the whole appliance, available to an authenticated administrator
+    only and confirmed before they run.
+  - A restart or shutdown MUST stop the Epilykos container cleanly first (SQLite WAL checkpoint) and then the host.
+  - Settings MUST also offer "Change Wi-Fi" (C-PROV-002) and the SSH controls (C-ACCESS-001).
+  - The container MUST reach these host actions through one narrow host interface that accepts only these named actions;
+    it MUST NOT gain general root access to the host.
+  - 'The application''s first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator
+    password.'
+  evidence:
+  - 'Restart and shutdown from the dashboard: clean journal shutdown, no fsck repair on the next boot'
+  - Unauthenticated request rejected
+  - Container cannot invoke any other host action through the interface
 - id: C-SECUREBOOT-001
   title: Optional verified-boot chain
   stage: 6
@@ -762,7 +777,10 @@ decisions_required:
     upstream boot mechanism (U-Boot, or Pi firmware tryboot/autoboot.txt with a RAUC custom backend) is adopted per board.
   due_stage: 0
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'U-Boot + RAUC bootchooser on the Tier 1 Pi 3B: the 0.5.3 image booted on the maintainer''s board through the
+    Pi firmware, U-Boot and boot.scr to multi-user from ROOT-A (2026-10-16). The slot-switch and forced-fallback evidence
+    is still C-BOOT-000''s. Tier 2 Pi 4 and Pi 5 use U-Boot as well, following Home Assistant OS.'
 - id: D-HW-001
   blocks:
   - C-HW-001
@@ -790,7 +808,10 @@ decisions_required:
   question: Include a dedicated recovery boot target in v1 or defer it and freeze a manual recovery procedure.
   due_stage: 0
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Deferred from v1: no RECOVERY partition. When both slots run out of attempts, boot.cmd gives both their attempts
+    back (RAUC''s reference behaviour). The v1 manual procedure is: keep dashboard backups; if the box no longer boots, reflash
+    the card and restore the backup in the setup wizard. A recovery system may be added in a later version.'
 - id: D-STORAGE-001
   blocks:
   - C-BOOT-001
@@ -799,7 +820,11 @@ decisions_required:
     is a microSD card: include card capacity and endurance class in the decision.'
   due_stage: 0
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Medium: microSD, 32 GB minimum, 64 GB recommended, A1/A2 high-endurance class recommended. Layout: U-Boot environment
+    raw at 4 MiB (two 16 KiB copies); BOOT 128 MiB FAT32; ROOT-A and ROOT-B 1536 MiB ext4 each, mounted read-only; DATA ext4
+    from the end of ROOT-B to the end of the card (grown on first boot). Snapshots are stored compressed. On a card below
+    32 GB the dashboard warns that snapshots and restore space may not fit.'
 - id: D-PROV-001
   blocks:
   - C-PROV-002
@@ -808,7 +833,10 @@ decisions_required:
     the supported host OS matrix.
   due_stage: 1
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: No physical gesture on Tier 1 (the Pi 3B has no button). Re-entry into Wi-Fi setup is either an authenticated
+    "Change Wi-Fi" action in Epilykos settings, which opens Bluetooth LE setup (Improv) for 15 minutes, or automatic after
+    the box has had no network address for 2 minutes. The Tier 2 USB-gadget host OS matrix is deferred with C-PROV-003.
 - id: D-TIME-001
   blocks:
   - C-TIME-001
@@ -816,7 +844,10 @@ decisions_required:
     time zone reach the application.
   due_stage: 1
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: systemd-timesyncd; NTP servers from DHCP first, then pool.ntp.org. The last known time is kept on DATA and restored
+    early in boot. The host exposes sync state to the container as a read-only file; the time zone is chosen in the setup
+    wizard and passed to the container as TZ.
 - id: D-RELEASE-001
   blocks:
   - C-RELEASE-001
@@ -824,7 +855,10 @@ decisions_required:
     into a stable application manifest.'
   due_stage: 2
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Only the maintainer (ashipaek0) merges dev into main, in both repositories. Merging dev into main in the application
+    repository is the release and everything after it is automatic: CI tags vX.Y.Z, publishes the digest records, updates
+    and merges the stable application manifest in epilykos-os, and builds the stable OS image.'
 - id: D-RESOURCE-001
   blocks:
   - C-RESOURCE-001
@@ -834,21 +868,28 @@ decisions_required:
     bms-bridge container).'
   due_stage: 2
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Epilykos container memory limit 640 MB; Node.js heap cap 384 MB (--max-old-space-size=384); zram swap 256 MB
+    (zstd); no swap on the SD card. Target: at least 100 MB free memory steady-state, to be re-measured on the Pi 3B with
+    a production-size database.'
 - id: D-RUNTIME-001
   blocks:
   - C-RUNTIME-001
   question: Freeze epilykos UID/GID and subuid/subgid ranges.
   due_stage: 2
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Rootful Podman for v1; the application runs as uid/gid 1000 inside the container. No subuid/subgid ranges:
+    rootless operation is dropped from v1.'
 - id: D-BLE-001
   blocks:
   - C-RUNTIME-003
   question: Run Stage 3 D-Bus/BlueZ spike for the Epilykos container and record minimum privilege set and D-Bus policy.
   due_stage: 3
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'No privileged container and no added capabilities: the application reaches host BlueZ over the system D-Bus
+    (socket bind-mounted read-only), and a D-Bus policy lets uid 1000 talk to org.bluez only.'
 - id: D-ACCESS-001
   blocks:
   - C-ACCESS-001
@@ -856,21 +897,29 @@ decisions_required:
     revocation, and disable/re-enable semantics.'
   due_stage: 4
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: SSH is off on a fresh box. An administrator turns it on in Epilykos settings; Raspberry Pi Imager's SSH settings
+    or an authorized_keys file on BOOT turn it on at first boot. Login is user epilykos (sudo) with a password (set in the
+    dashboard or by Imager) and/or public keys (pasted in the dashboard, from Imager, or authorized_keys on BOOT); the appliance
+    does not generate keypairs. Root login stays disabled. Password and keys live on DATA; turning SSH off stops the server
+    and keeps them; the dashboard can remove each key and clear the password.
 - id: D-BOOT-001
   blocks:
   - C-BOOT-002
   question: Freeze U-Boot boot-attempt counts and environment storage/redundancy.
   due_stage: 4
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 3 boot attempts per slot (RAUC boot-attempts and boot-attempts-primary = 3). U-Boot environment raw on the SD
+    card at 4 MiB and 4 MiB + 16 KiB, two redundant 16 KiB copies, matched by /etc/fw_env.config.
 - id: D-LOG-001
   blocks:
   - C-LOG-001
   question: Freeze persistent journal storage cap.
   due_stage: 4
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: Persistent journal on DATA, capped at 64 MB (SystemMaxUse=64M).
 - id: D-SQLITE-001
   blocks:
   - C-DATA-003
@@ -878,7 +927,9 @@ decisions_required:
     since app commit fabfa89).
   due_stage: 4
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: synchronous=FULL on the appliance (SQLITE_SYNCHRONOUS=FULL). PRAGMA quick_check runs after every unclean shutdown
+    and weekly, outside the boot-health gate.
 - id: D-UPDATE-001
   blocks:
   - C-UPDATE-004
@@ -886,7 +937,11 @@ decisions_required:
     or pinned/verified source plus authenticated per-candidate user approval; define v1 delivery paths.'
   due_stage: 5
   stage0_review_required: true
-  status: open
+  status: resolved
+  resolution: 'Signed manifests. CI signs each application release manifest with an Ed25519 key held in the application repository''s
+    secrets, separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator
+    approves it, or automatically if enabled. Delivery: online check against the GitHub release, dashboard upload, or USB
+    stick.'
 test_fixture_notes:
 - tests:
   - T-RUNTIME-001
@@ -903,6 +958,19 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.6.0-draft
+  changes:
+  - 'All fourteen open decisions resolved (2026-10-16): D-BOOT-001, D-BOOT-002, D-STORAGE-001, D-RECOVERY-001, D-PROV-001,
+    D-TIME-001, D-RELEASE-001, D-RESOURCE-001, D-RUNTIME-001, D-BLE-001, D-ACCESS-001, D-LOG-001, D-SQLITE-001, D-UPDATE-001.'
+  - 'C-BOOT-001: ROOT-A/B read-only and DATA repaired at boot, after power cuts damaged partitions on the first hardware
+    test; sizes frozen (32 GB minimum card).'
+  - 'C-ACCESS-001: SSH stays off by default but now supports password and key login for user epilykos; keys are supplied,
+    not generated.'
+  - 'C-PROV-002: Bluetooth LE (Improv) replaces the access-point portal; re-entry by dashboard action or network loss.'
+  - 'C-RUNTIME-001 and C-DATA-002: rootful Podman for v1, application as uid 1000.'
+  - 'C-RELEASE-001: merging dev into main in the application repository releases automatically.'
+  - 'New C-HOST-001: Restart, Shut down, Change Wi-Fi and SSH in Epilykos settings through a narrow host interface; first-run
+    setup no longer needs a code from the log.'
 - version: 0.5.3-draft
   changes:
   - 'EpilykosOS Tier 1 image moves to AArch64: the application images are published for linux/amd64 and linux/arm64

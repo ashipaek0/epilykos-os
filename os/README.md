@@ -172,19 +172,19 @@ real-hardware boot fails, that failure is useful signal for `C-BOOT-000` —
 please record it in `evidence/stage-0/`, not just fix it silently past
 what the contract expects to be reviewed.
 
-## Open decisions this depends on
+## Decisions this implements
 
-- `D-STORAGE-001` (BOOT/ROOT-A/ROOT-B/DATA sizes) — `genimage.cfg`'s
-  partition sizes are placeholders, not this decision.
+All of the contract's decisions were settled in 0.6.0-draft; the ones
+this tree implements directly:
+
+- `D-STORAGE-001` — `genimage.cfg`: BOOT 128 MiB, ROOT-A/B 1536 MiB each,
+  DATA grown to fill a card of at least 32 GB.
+- `D-BOOT-001` — `boot.cmd`, `uboot.fragment` and RAUC's `system.conf`:
+  3 attempts per slot, raw redundant environment at 4 MiB.
+- `D-RECOVERY-001` — no recovery target in v1: when both slots run out
+  of attempts, `boot.cmd` gives both their attempts back; the documented
+  fix is reflashing and restoring a dashboard backup.
+- `D-RUNTIME-001` — Podman runs rootful; the app inside the container is
+  uid 1000.
 - `C-BOOT-001` asks for GPT; the Pi 3B needs an MBR (or a hybrid MBR), so
-  the image uses plain MBR until that is settled.
-- `D-BOOT-001` (attempt counts, environment location) — `boot.cmd`,
-  `uboot.fragment` and RAUC's `system.conf` implement a proposal (3
-  attempts, raw redundant environment), not the decision.
-- `D-RECOVERY-001` (a dedicated recovery target vs. a manual procedure) —
-  when both slots run out of attempts, `boot.cmd` gives both their
-  attempts back (RAUC's reference behaviour); that is a stopgap.
-- `D-RUNTIME-001` — Podman runs rootful for now (the app inside the
-  container is still uid 1000); rootless waits on this decision.
-- `D-BOOT-002` — this tree implements what it asks to confirm, but the
-  confirming evidence doesn't exist yet.
+  the image uses plain MBR — a recorded deviation.

@@ -43,9 +43,14 @@ def import_boot_files():
     consumed = []
     for name, parse in found:
         path = os.path.join(BOOT, name)
+        with open(path, 'rb') as f:
+            data = f.read()
+        if wifi.is_blank(data):
+            log(f'{name}: not imported (the file is empty; if it was just saved, the card '
+                'may have been removed before the computer finished writing it); left in place')
+            continue
         try:
-            with open(path, encoding='utf-8', errors='surrogateescape') as f:
-                net = parse(f.read())
+            net = parse(wifi.decode_boot_file(data))
         except (wifi.WifiError, ValueError, UnicodeError) as e:
             log(f'{name}: not imported ({e}); left in place')
             continue

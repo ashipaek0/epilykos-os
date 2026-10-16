@@ -608,14 +608,20 @@ async def main():
     improv = Improv(bus)
     improv.export()
 
-    adapter = None
+    adapter, since, reported = None, time.monotonic(), False
     while adapter is None:
         try:
             adapter = await improv.find_adapter()
         except DBusError:
             pass
         if adapter is None:
+            if not reported and time.monotonic() - since > 30:
+                log('no Bluetooth LE adapter yet; still waiting '
+                    '(see `bluetoothctl show` and `journalctl -k | grep -i blue`)')
+                reported = True
             await asyncio.sleep(5)
+    if reported:
+        log(f'Bluetooth adapter {adapter} is up')
     owner = await name_owner(bus, BLUEZ)
     await improv.register(adapter)
 

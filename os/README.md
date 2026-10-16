@@ -92,7 +92,11 @@ written to the journal (`C-PROV-002`).
 
 On the console, `iwctl station wlan0 show` and `networkctl` show the
 Wi-Fi state; `journalctl -u epilykos-wifi-import -u epilykos-improv`
-shows what setup did.
+shows what setup did. A `wifi.txt` that was not imported stays on BOOT
+and the journal says why; the commonest cause is pulling the card out
+before the computer finished writing it, so eject it first. To join a
+network by hand instead, `iwctl station wlan0 connect "<network name>"`
+asks for the password and remembers the network.
 
 ## First boot
 

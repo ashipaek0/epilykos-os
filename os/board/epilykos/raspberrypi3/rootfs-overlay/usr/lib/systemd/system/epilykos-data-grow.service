@@ -1,12 +1,18 @@
 [Unit]
 Description=EpilykosOS: grow the DATA partition to fill the SD card
-RequiresMountsFor=/data
-Before=epilykos.service
+# Before /data is mounted: see epilykos-data-grow. If growing fails, DATA
+# still mounts at its old size and the next boot tries again.
+DefaultDependencies=no
+Requires=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device
+After=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device systemd-fsck@dev-disk-by\x2dpartuuid-45504c4b\x2d04.service
+Before=data.mount shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/epilykos-data-grow
 RemainAfterExit=yes
+TimeoutStartSec=10min
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=local-fs.target

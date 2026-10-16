@@ -156,6 +156,26 @@ def load_country(path: str = None) -> str:
 
 # -- Provisioning files on the BOOT partition ------------------------------
 
+def decode_boot_file(data: bytes) -> str:
+    """The text of a file someone saved on BOOT from their computer: UTF-8
+    with or without a byte-order mark, or UTF-16 (what Windows Notepad
+    writes for "Unicode"), read leniently so one odd byte doesn't lose the
+    whole file."""
+    if data.startswith((b'\xff\xfe', b'\xfe\xff')):
+        return data.decode('utf-16', 'replace')
+    if data.startswith(b'\xef\xbb\xbf'):
+        data = data[3:]
+    # A partly written file can end in zero bytes.
+    return data.rstrip(b'\0').decode('utf-8', 'surrogateescape')
+
+
+def is_blank(data: bytes) -> bool:
+    """True for an empty file, or one that is only zero bytes: what a FAT
+    card often holds when it was pulled out before the computer finished
+    writing the file."""
+    return not data.strip(b'\0 \t\r\n')
+
+
 def _unquote(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
@@ -182,9 +202,11 @@ def parse_wifi_txt(text: str) -> WifiNetwork:
             continue
         key, value = line.split('=', 1)
         values[key.strip().lower()] = _unquote(value)
-    ssid = values.get('ssid', '')
-    if not ssid:
+    if 'ssid' not in values:
         raise WifiError('wifi.txt has no ssid= line')
+    ssid = values['ssid']
+    if not ssid:
+        raise WifiError('ssid= is empty in wifi.txt')
     password = values.get('password', values.get('psk', values.get('passphrase', '')))
     return WifiNetwork(ssid=ssid.encode('utf-8'), passphrase=password,
                        hidden=_truthy(values.get('hidden', '')),

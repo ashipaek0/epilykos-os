@@ -8,12 +8,16 @@ sends the Wi-Fi name and password. Home Assistant also discovers Improv
 devices. The box joins the network and answers with the address of the
 Epilykos dashboard. No pairing is needed.
 
-When it advertises (C-PROV-002: setup is available when no usable network
-is configured):
-  - whenever the box has no IPv4 address on any wired or Wi-Fi interface;
+When it advertises (C-PROV-002, D-PROV-001):
+  - while the box has no IPv4 address on any wired or Wi-Fi interface:
+    straight away if no Wi-Fi network is configured yet, otherwise once
+    the network has been gone for 2 minutes (so a router reboot or a
+    slow join doesn't open setup);
   - for the first 30 minutes after boot while no Wi-Fi network is
-    configured, so a box on Ethernet can still be given Wi-Fi.
-Re-entry after setup through a physical gesture is D-PROV-001 (open).
+    configured, so a box on Ethernet can still be given Wi-Fi;
+  - for 15 minutes after an administrator chooses "Change Wi-Fi" in
+    Epilykos settings (epilykos-hostd writes the end time to
+    /run/epilykos/wifi-setup-until).
 
 Credentials go straight into iwd's known-network file on DATA; they are
 never logged.
@@ -67,6 +71,8 @@ NAME_ADV_PATH = APP_PATH + '/advertisement1'
 DEVICE_NAME = 'Epilykos'
 APP_PORT = 3000
 SETUP_WINDOW_S = int(os.environ.get('EPILYKOS_IMPROV_SETUP_WINDOW', '1800'))
+OFFLINE_GRACE_S = int(os.environ.get('EPILYKOS_IMPROV_OFFLINE_GRACE', '120'))
+DASHBOARD_WINDOW_FILE = os.environ.get('EPILYKOS_WIFI_SETUP_FILE', '/run/epilykos/wifi-setup-until')
 LED = '/sys/class/leds/ACT'
 
 BLUEZ = 'org.bluez'
@@ -181,6 +187,22 @@ def online_address():
             if ip:
                 return ip
     return None
+
+
+def dashboard_window_open():
+    """True while a "Change Wi-Fi" request from the dashboard is open."""
+    try:
+        with open(DASHBOARD_WINDOW_FILE) as f:
+            return time.time() < float(f.read().strip())
+    except (OSError, ValueError):
+        return False
+
+
+def close_dashboard_window():
+    try:
+        os.unlink(DASHBOARD_WINDOW_FILE)
+    except OSError:
+        pass
 
 
 def device_model():
@@ -425,6 +447,7 @@ class Improv:
         self.assembler = RpcAssembler()
         self.capabilities = CAP_DEVICE_INFO | CAP_SCAN | (CAP_IDENTIFY if os.path.isdir(LED) else 0)
         self.state = STATE_AUTHORIZED
+        self.offline_since = None
         self.adapter = None
         self.advertising = False
 
@@ -549,6 +572,7 @@ class Improv:
             self.set_state(STATE_AUTHORIZED)
             return
         log(f'joined "{net.display_ssid}" as {ip}')
+        close_dashboard_window()
         self.send_result(CMD_WIFI_SETTINGS, [f'http://{ip}:{APP_PORT}/'])
         self.set_state(STATE_PROVISIONED)
 
@@ -597,8 +621,15 @@ class Improv:
     def should_advertise(self):
         if self.state == STATE_PROVISIONING:
             return self.advertising
-        if not online_address():
+        if dashboard_window_open():
             return True
+        if not online_address():
+            if self.offline_since is None:
+                self.offline_since = time.monotonic()
+            if not wifi.configured_networks():
+                return True
+            return time.monotonic() - self.offline_since >= OFFLINE_GRACE_S
+        self.offline_since = None
         in_window = time.monotonic() - self.started < self.setup_window
         return in_window and not wifi.configured_networks()
 
@@ -608,14 +639,20 @@ async def main():
     improv = Improv(bus)
     improv.export()
 
-    adapter = None
+    adapter, since, reported = None, time.monotonic(), False
     while adapter is None:
         try:
             adapter = await improv.find_adapter()
         except DBusError:
             pass
         if adapter is None:
+            if not reported and time.monotonic() - since > 30:
+                log('no Bluetooth LE adapter yet; still waiting '
+                    '(see `bluetoothctl show` and `journalctl -k | grep -i blue`)')
+                reported = True
             await asyncio.sleep(5)
+    if reported:
+        log(f'Bluetooth adapter {adapter} is up')
     owner = await name_owner(bus, BLUEZ)
     await improv.register(adapter)
 
@@ -624,7 +661,7 @@ async def main():
             log('bluetoothd restarted; exiting so systemd starts a fresh registration')
             return 1
         want = improv.should_advertise()
-        if want and improv.state == STATE_PROVISIONED and not online_address():
+        if want and improv.state == STATE_PROVISIONED and (not online_address() or dashboard_window_open()):
             improv.set_state(STATE_AUTHORIZED)
         try:
             await improv.advertise(want)

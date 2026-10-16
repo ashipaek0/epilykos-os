@@ -1,0 +1,22 @@
+#!/bin/sh
+# Compressed swap in RAM (C-RESOURCE-001, D-RESOURCE-001): 256 MB of
+# zram, zstd. Swap on the SD card is never configured.
+set -eu
+SIZE=256M
+dev=/sys/block/zram0
+case "${1:-start}" in
+start)
+	modprobe zram num_devices=1
+	if ! grep -q '^/dev/zram0 ' /proc/swaps; then
+		echo 1 > "$dev/reset" 2>/dev/null || true
+		echo zstd > "$dev/comp_algorithm" 2>/dev/null || echo "epilykos-zram: zstd unavailable, using $(cat "$dev/comp_algorithm")"
+		echo "$SIZE" > "$dev/disksize"
+		mkswap /dev/zram0 >/dev/null
+		swapon -p 100 /dev/zram0
+	fi
+	;;
+stop)
+	swapoff /dev/zram0 2>/dev/null || true
+	echo 1 > "$dev/reset" 2>/dev/null || true
+	;;
+esac

@@ -1,8 +1,8 @@
 [Unit]
-Description=EpilykosOS: import Wi-Fi settings left on the BOOT partition
+Description=EpilykosOS: import Wi-Fi and SSH settings left on the BOOT partition
 RequiresMountsFor=/data
 After=boot.mount systemd-tmpfiles-setup.service
-Before=iwd.service epilykos-improv.service
+Before=iwd.service epilykos-improv.service epilykos-sshd.service
 
 [Service]
 Type=oneshot

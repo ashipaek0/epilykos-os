@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the rootfs overlay
@@ -30,6 +31,8 @@ if 'DBUS_SESSION_BUS_ADDRESS' not in os.environ or os.environ.get('EPILYKOS_TEST
 
 IWD_DIR = tempfile.mkdtemp(prefix='iwd-')
 os.environ['EPILYKOS_IWD_DIR'] = IWD_DIR
+WINDOW_FILE = os.path.join(tempfile.mkdtemp(prefix='run-'), 'wifi-setup-until')
+os.environ['EPILYKOS_WIFI_SETUP_FILE'] = WINDOW_FILE
 sys.path.insert(0, str(OVERLAY / 'usr/lib/epilykos/python'))
 loader = importlib.machinery.SourceFileLoader('improv', str(OVERLAY / 'usr/bin/epilykos-improv'))
 spec = importlib.util.spec_from_loader('improv', loader)
@@ -301,6 +304,25 @@ async def main():
     await service.advertise(False)
     assert advm.active == {}
     ok('stops advertising once online with Wi-Fi configured')
+
+    # "Change Wi-Fi" in the dashboard opens setup while online (D-PROV-001).
+    with open(WINDOW_FILE, 'w') as f:
+        f.write(str(time.time() + 900))
+    assert service.should_advertise(), 'dashboard window must open setup'
+    with open(WINDOW_FILE, 'w') as f:
+        f.write(str(time.time() - 1))
+    assert not service.should_advertise(), 'an expired dashboard window must not'
+    os.unlink(WINDOW_FILE)
+    ok('dashboard "Change Wi-Fi" opens setup for its window only')
+
+    # Network lost with Wi-Fi configured: setup opens only after the grace period.
+    FakeNetwork.connected = False
+    assert not service.should_advertise(), 'must wait out a short network loss'
+    service.offline_since -= improv.OFFLINE_GRACE_S + 1
+    assert service.should_advertise(), 'must reopen after 2 minutes offline'
+    FakeNetwork.connected = True
+    assert not service.should_advertise()
+    ok('network loss reopens setup after the grace period, not before')
 
     await write(improv.encode_rpc(improv.CMD_SCAN, b''))
     await wait_for(lambda: _startswith(read('char3'), bytes([improv.CMD_SCAN])), 'scan result')

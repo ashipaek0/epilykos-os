@@ -79,8 +79,10 @@ CONFIG_CPUSETS=y
 CONFIG_OVERLAY_FS=y
 CONFIG_FUSE_FS=y
 
-# zram is the only swap C-RESOURCE-001 allows.
+# zram is the only swap C-RESOURCE-001 allows; zstd is its compressor
+# (D-RESOURCE-001).
 CONFIG_ZRAM=m
+CONFIG_CRYPTO_ZSTD=y
 
 # -- Trim SoC families this board is not. Their drivers depend on these
 # symbols, so this removes hundreds of modules and a good share of the

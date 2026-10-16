@@ -1,0 +1,34 @@
+#!/bin/sh
+# SSH maintenance login plumbing (C-ACCESS-001); see epilykos_ssh.py.
+#   epilykos-ssh shadow    at boot: put the epilykos password from DATA into
+#                          a copy of /etc/shadow and bind-mount it over the
+#                          read-only original
+#   epilykos-ssh hostkey   before sshd starts: make the host key on DATA
+set -eu
+RUN=/run/epilykos
+SSH_DIR=/data/ssh
+case "${1:-}" in
+shadow)
+	mkdir -p "$RUN"
+	chmod 0755 "$RUN"
+	if ! findmnt -n /etc/shadow >/dev/null 2>&1; then
+		install -m 0600 /etc/shadow "$RUN/shadow.base"
+		: > "$RUN/shadow"
+		chmod 0600 "$RUN/shadow"
+	fi
+	python3 -c 'import sys; sys.path.insert(0, "/usr/lib/epilykos/python"); import epilykos_ssh; epilykos_ssh.write_shadow()'
+	findmnt -n /etc/shadow >/dev/null 2>&1 || mount --bind "$RUN/shadow" /etc/shadow
+	;;
+hostkey)
+	mkdir -p "$SSH_DIR"
+	if [ ! -s "$SSH_DIR/ssh_host_ed25519_key" ]; then
+		rm -f "$SSH_DIR/ssh_host_ed25519_key" "$SSH_DIR/ssh_host_ed25519_key.pub"
+		ssh-keygen -q -t ed25519 -N '' -C "epilykos host key" -f "$SSH_DIR/ssh_host_ed25519_key"
+		echo "epilykos-ssh: made the SSH host key"
+	fi
+	;;
+*)
+	echo "usage: epilykos-ssh shadow|hostkey" >&2
+	exit 2
+	;;
+esac

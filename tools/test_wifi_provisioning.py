@@ -139,7 +139,22 @@ n = wifi.parse_wifi_txt('ssid="  spaced  "\npassword="a=b=c=d#e!"\n')
 assert (n.ssid, n.passphrase) == (b'  spaced  ', 'a=b=c=d#e!'), n
 ok('wifi.txt: quoted values keep spaces, = and # in passwords')
 
+TEMPLATE = (ROOT / 'os/board/epilykos/raspberrypi3/wifi-example.txt').read_text()
+filled = TEMPLATE.replace('ssid=\n', 'ssid=Home Net\n').replace('password=\n', f'password={SECRET}\n')
+for label, data in [('UTF-8', filled.encode()), ('UTF-8 with BOM, CRLF', b'\xef\xbb\xbf' + filled.replace('\n', '\r\n').encode()),
+                    ('UTF-16 (Notepad "Unicode")', filled.replace('\n', '\r\n').encode('utf-16')),
+                    ('UTF-16 big-endian', '﻿'.encode('utf-16-be') + filled.encode('utf-16-be')),
+                    ('trailing zero bytes', filled.encode() + b'\0' * 512)]:
+    n = wifi.parse_wifi_txt(wifi.decode_boot_file(data))
+    assert (n.ssid, n.passphrase, n.country) == (b'Home Net', SECRET, ''), (label, n)
+ok('wifi.txt from the template: UTF-8, BOM, CRLF, UTF-16, zero padding; country optional')
+
+assert wifi.is_blank(b'') and wifi.is_blank(b'\0' * 4096) and wifi.is_blank(b'\r\n')
+assert not wifi.is_blank(filled.encode())
+ok('empty and zero-filled files are recognised')
+
 expect_error('wifi.txt without ssid', wifi.parse_wifi_txt, f'password={SECRET}\n')
+expect_error('wifi.txt with an empty ssid', wifi.parse_wifi_txt, TEMPLATE)
 expect_error('password too short', wifi.parse_wifi_txt, 'ssid=x\npassword=short\n')
 expect_error('bad country', wifi.parse_wifi_txt, f'ssid=x\npassword={SECRET}\ncountry=Nigeria\n')
 
@@ -187,6 +202,23 @@ with tempfile.TemporaryDirectory() as d:
     assert country.read_text() == 'GB\n', country.read_text()  # network-config is applied after firstrun.sh
     assert 'wifi.txt: not imported' in out, out
 ok('epilykos-wifi-import: imports Imager files, deletes them, keeps bad ones, never logs passwords')
+
+with tempfile.TemporaryDirectory() as d:
+    boot, iwd = Path(d, 'boot'), Path(d, 'iwd')
+    boot.mkdir()
+    (boot / 'wifi.txt').write_bytes(filled.replace('\n', '\r\n').encode('utf-16'))
+    (boot / 'wpa_supplicant.conf').write_bytes(b'\0' * 4096)
+    env.update(EPILYKOS_BOOT_DIR=str(boot), EPILYKOS_IWD_DIR=str(iwd),
+               EPILYKOS_WIFI_COUNTRY_FILE=str(Path(d, 'wifi-country')))
+    r = subprocess.run([sys.executable, str(OVERLAY / 'usr/bin/epilykos-wifi-import')],
+                       env=env, capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert SECRET not in out, out
+    assert os.listdir(iwd) == ['Home Net.psk'], os.listdir(iwd)
+    assert os.listdir(boot) == ['wpa_supplicant.conf'], os.listdir(boot)
+    assert 'wpa_supplicant.conf: not imported (the file is empty' in out, out
+ok('epilykos-wifi-import: UTF-16 wifi.txt imported; an empty (unflushed) file is reported and kept')
 
 # -- Raspberry Pi Imager OS list ---------------------------------------------------
 with tempfile.TemporaryDirectory() as d:

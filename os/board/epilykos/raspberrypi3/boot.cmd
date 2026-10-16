@@ -51,8 +51,8 @@ done
 if test -n "${bootargs}"; then
   saveenv
 else
-  # Both slots used up their attempts. There is no recovery target yet
-  # (D-RECOVERY-001 is open); this is RAUC's reference behaviour:
+  # Both slots used up their attempts. v1 has no recovery target
+  # (D-RECOVERY-001); this is RAUC's reference behaviour:
   # give both slots their attempts back and start over.
   echo "EpilykosOS: no slot has attempts left; resetting both to 3"
   setenv BOOT_A_LEFT 3
@@ -61,9 +61,19 @@ else
   reset
 fi
 
-# Serial console last so it is /dev/console (systemd's status output and
-# the boot evidence for C-BOOT-000 go there); HDMI (tty1) gets a copy.
-setenv bootargs "${bootargs} rootfstype=ext4 rootwait rw console=tty1 console=ttyS1,115200"
+# The root filesystem is mounted read-only and stays that way
+# (C-BOOT-001); fsck.repair=yes lets the boot-time check fix DATA after a
+# power cut instead of stopping in emergency mode. machine_id is saved
+# into this environment on the first boot (epilykos-machine-id) so the
+# read-only root keeps one machine ID, and with it one journal, across
+# reboots. Serial console last so it is /dev/console (systemd's status
+# output and the boot evidence for C-BOOT-000 go there); HDMI (tty1)
+# gets a copy.
+setenv bootargs "${bootargs} rootfstype=ext4 rootwait ro fsck.repair=yes"
+if test -n "${machine_id}"; then
+  setenv bootargs "${bootargs} systemd.machine_id=${machine_id}"
+fi
+setenv bootargs "${bootargs} console=tty1 console=ttyS1,115200"
 
 fatload ${devtype} ${devnum}:1 ${kernel_addr_r} Image
 fatload ${devtype} ${devnum}:1 ${fdt_addr_r} bcm2837-rpi-3-b.dtb

@@ -1,0 +1,23 @@
+[Unit]
+Description=EpilykosOS: system actions for Epilykos settings (restart, shut down, Wi-Fi, SSH)
+Documentation=file:///usr/bin/epilykos-hostd
+# Its socket directory is bind-mounted into the container, so it has to
+# exist before epilykos.service starts the container.
+RequiresMountsFor=/data
+After=epilykos-shadow.service
+Before=epilykos.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/epilykos-hostd
+RuntimeDirectory=epilykos-host
+RuntimeDirectoryMode=0755
+# Keep the directory across restarts: the running container has it
+# bind-mounted, and a new directory would not be visible inside.
+RuntimeDirectoryPreserve=yes
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

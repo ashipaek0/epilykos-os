@@ -88,10 +88,26 @@ BR2_TARGET_GENERIC_GETTY_PORT="ttyS1"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 BR2_TARGET_GENERIC_HOSTNAME="epilykos"
 BR2_TARGET_GENERIC_ISSUE="EpilykosOS"
-# No root password is set: the only way in is the local serial or HDMI
-# console (there is no SSH, C-ACCESS-001), which already means physical
-# access. A fixed password in this file would be the same on every box and
-# public, so it would add nothing but the appearance of protection.
+# Read-only root (C-BOOT-001): ROOT-A/B are never written in normal
+# operation, so cutting the power can't damage the OS. /var is a tmpfs
+# filled from a factory copy at boot; what must persist (journal,
+# Bluetooth pairings, last known time, Wi-Fi) is bind-mounted from DATA.
+# BR2_TARGET_GENERIC_REMOUNT_ROOTFS_RW is not set
+BR2_INIT_SYSTEMD_VAR_FACTORY=y
+# No root password is set: root can only log in on the local serial or
+# HDMI console, which already means physical access. A fixed password in
+# this file would be the same on every box and public, so it would add
+# nothing but the appearance of protection.
+
+# -- SSH maintenance login (C-ACCESS-001): off by default; turned on in
+# Epilykos settings (or by Raspberry Pi Imager / authorized_keys on BOOT)
+# for user epilykos with a password and/or keys, never for root.
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_OPENSSH_SERVER=y
+BR2_PACKAGE_OPENSSH_KEY_UTILS=y
+# BR2_PACKAGE_OPENSSH_CLIENT is not set
+BR2_PACKAGE_SUDO=y
+BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/users.table"
 
 # -- A/B update mechanism (C-RELEASE-001, C-BOOT-002) --
 BR2_PACKAGE_RAUC=y

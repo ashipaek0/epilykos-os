@@ -4,8 +4,8 @@ Documentation=https://github.com/ashipaek0/epilykos
 # Local monitoring must not wait for the network (C-NET-001): only the
 # local filesystems, DATA's first-boot grow and BlueZ come first.
 RequiresMountsFor=/data
-Wants=bluetooth.service
-After=epilykos-data-grow.service bluetooth.service network.target
+Wants=bluetooth.service epilykos-hostd.service
+After=epilykos-data-grow.service bluetooth.service network.target epilykos-hostd.service
 
 [Service]
 Environment=PODMAN_SYSTEMD_UNIT=%n
@@ -15,7 +15,9 @@ EnvironmentFile=/usr/lib/epilykos/image.env
 TimeoutStartSec=20min
 ExecStartPre=/usr/bin/epilykos-image-load
 ExecStart=/usr/bin/epilykos-run
-ExecStop=/usr/bin/podman rm -v -f -i --cidfile=/run/epilykos.cid
+# SIGTERM first, with time for the app to close its database (which
+# checkpoints the SQLite WAL) before anything is killed (C-HOST-001).
+ExecStop=/usr/bin/podman stop --ignore --time=30 --cidfile=/run/epilykos.cid
 ExecStopPost=-/usr/bin/podman rm -v -f -i --cidfile=/run/epilykos.cid
 Type=notify
 NotifyAccess=all

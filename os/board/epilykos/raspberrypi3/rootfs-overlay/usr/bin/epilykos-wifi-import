@@ -11,14 +11,19 @@ Recognised files in the root of BOOT (any of them):
 
 Each network found becomes an iwd known network on DATA, and the file is
 deleted from BOOT afterwards so the password doesn't stay readable on the
-card. Imager's files are only read for their Wi-Fi settings, never run.
+card. Imager's files are only read for their settings, never run.
 Passwords are never logged (C-PROV-002).
+
+SSH (C-ACCESS-001) can be turned on the same way: Imager's SSH settings in
+firstrun.sh (password or public keys for its user, applied to user
+epilykos), or an authorized_keys file in the root of BOOT.
 """
 import os
 import subprocess
 import sys
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_ssh as ssh  # noqa: E402
 import epilykos_wifi as wifi  # noqa: E402
 
 BOOT = os.environ.get('EPILYKOS_BOOT_DIR', '/boot')
@@ -35,6 +40,47 @@ def boot_rw(writable):
     return subprocess.run(['mount', '-o', opt, BOOT]).returncode == 0
 
 
+def apply_ssh(source, pw_hash, keys):
+    for key in keys:
+        ssh.add_key(key)
+    if pw_hash:
+        ssh.set_password_hash(pw_hash)
+    if os.path.exists(os.path.join(ssh.RUN_DIR, 'shadow.base')):
+        ssh.write_shadow()
+    ssh.set_enabled(True)
+    log(f'{source}: SSH turned on for user {ssh.USER} ({len(keys)} key(s)'
+        f'{", password set" if pw_hash else ""})')
+
+
+def import_ssh_files():
+    """Before the Wi-Fi import, which deletes firstrun.sh."""
+    path = os.path.join(BOOT, 'firstrun.sh')
+    if os.path.isfile(path):
+        with open(path, 'rb') as f:
+            enabled, pw_hash, keys = ssh.parse_firstrun_ssh(wifi.decode_boot_file(f.read()))
+        if enabled and (pw_hash or keys):
+            apply_ssh('firstrun.sh', pw_hash, keys)
+        elif enabled:
+            log('firstrun.sh: asks for SSH but has no usable password or key; SSH stays off')
+    for name in ('authorized_keys', 'authorized_keys.txt'):
+        path = os.path.join(BOOT, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, 'rb') as f:
+            data = f.read()
+        try:
+            keys = ssh.parse_authorized_keys(wifi.decode_boot_file(data))
+        except ssh.SshError as e:
+            log(f'{name}: not imported ({e}); left in place')
+            continue
+        apply_ssh(name, None, keys)
+        if boot_rw(True):
+            try:
+                os.unlink(path)
+            finally:
+                boot_rw(False)
+
+
 def import_boot_files():
     found = [(name, parse) for name, parse in wifi.BOOT_SOURCES
              if os.path.isfile(os.path.join(BOOT, name))]
@@ -43,9 +89,14 @@ def import_boot_files():
     consumed = []
     for name, parse in found:
         path = os.path.join(BOOT, name)
+        with open(path, 'rb') as f:
+            data = f.read()
+        if wifi.is_blank(data):
+            log(f'{name}: not imported (the file is empty; if it was just saved, the card '
+                'may have been removed before the computer finished writing it); left in place')
+            continue
         try:
-            with open(path, encoding='utf-8', errors='surrogateescape') as f:
-                net = parse(f.read())
+            net = parse(wifi.decode_boot_file(data))
         except (wifi.WifiError, ValueError, UnicodeError) as e:
             log(f'{name}: not imported ({e}); left in place')
             continue
@@ -81,6 +132,7 @@ def apply_country():
 
 def main():
     if os.path.isdir(BOOT):
+        import_ssh_files()
         import_boot_files()
     else:
         log(f'{BOOT} is not mounted; nothing to import')

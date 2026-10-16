@@ -45,6 +45,13 @@ own partition layout).
   | p3 ROOT-B | `45504c4b-03` | root filesystem, slot B |
   | p4 DATA | `45504c4b-04` | `/data`, grown to fill the card on first boot |
 
+- Power cuts: ROOT-A and ROOT-B are mounted read-only and never written
+  in normal operation; `/var` is a tmpfs. What has to survive a reboot
+  lives on DATA, which is checked and repaired at boot: the app's data,
+  Podman's storage, Wi-Fi networks, Bluetooth pairings, the last known
+  time and the journal (64 MB cap, so `journalctl -b -1` shows the
+  previous boot). The machine ID is kept in the U-Boot environment. Swap
+  is 256 MB of compressed RAM (zram), never the SD card.
 - Networking: DHCP on wired Ethernet and Wi-Fi (Ethernet preferred when
   both are up), reachable as `epilykos.local` (mDNS). Wi-Fi is iwd; known
   networks are kept on DATA (`/data/iwd`) so they survive OS updates.
@@ -57,9 +64,18 @@ own partition layout).
 - Boot health: `epilykos-mark-good.service` marks the slot good once
   `/data` is mounted, Podman works and the app's `/healthz` is healthy
   (`C-BOOT-003`). No network is needed for any of it.
-- Console only, no SSH (`C-ACCESS-001`): log in on the serial header
-  (GPIO 14/15, 115200 8N1) or HDMI + USB keyboard as `root`; there is no
-  password, because reaching either console already takes physical access.
+- Logins: the serial header (GPIO 14/15, 115200 8N1) or HDMI + USB
+  keyboard as `root`, with no password, because reaching either console
+  already takes physical access. SSH is off until turned on
+  (`C-ACCESS-001`): in Epilykos settings, by Raspberry Pi Imager's SSH
+  settings, or with an `authorized_keys` file on BOOT. It is for user
+  `epilykos` (sudo) with a password and/or public keys, never root; all of
+  it is kept on DATA (`/data/ssh`).
+- System actions in Epilykos settings (`C-HOST-001`): Restart, Shut down,
+  Change Wi-Fi (opens Bluetooth setup for 15 minutes) and the SSH
+  controls. The container reaches them only through `epilykos-hostd`, a
+  socket that accepts exactly those actions. Shut down halts the Pi; it
+  is safe to unplug once the green light stops flashing.
 
 ## Wi-Fi setup
 
@@ -85,14 +101,23 @@ Any one of these works; Ethernet needs no setup at all.
 Files on BOOT are read once at boot (`epilykos-wifi-import`), saved as an
 iwd network, and deleted from the card so the password doesn't stay
 there. Imager's `firstrun.sh` is only read for its Wi-Fi settings, never
-run. Bluetooth setup is offered whenever the box has no network address,
-and for the first 30 minutes after each boot while no Wi-Fi is configured
-(so a box on Ethernet can still be given Wi-Fi). Passwords are never
-written to the journal (`C-PROV-002`).
+run. Bluetooth setup is offered (`C-PROV-002`, `D-PROV-001`):
+
+- while the box has no network address: at once if no Wi-Fi is saved
+  yet, otherwise once the network has been gone for 2 minutes;
+- for the first 30 minutes after each boot while no Wi-Fi is saved, so a
+  box on Ethernet can still be given Wi-Fi;
+- for 15 minutes after "Change Wi-Fi" in Epilykos settings.
+
+Passwords are never written to the journal.
 
 On the console, `iwctl station wlan0 show` and `networkctl` show the
 Wi-Fi state; `journalctl -u epilykos-wifi-import -u epilykos-improv`
-shows what setup did.
+shows what setup did. A `wifi.txt` that was not imported stays on BOOT
+and the journal says why; the commonest cause is pulling the card out
+before the computer finished writing it, so eject it first. To join a
+network by hand instead, `iwctl station wlan0 connect "<network name>"`
+asks for the password and remembers the network.
 
 ## First boot
 
@@ -125,6 +150,8 @@ os/
     wifi-example.txt                      Wi-Fi template placed on BOOT
     rootfs-overlay/                       files copied onto the built rootfs:
                                             systemd units + presets, epilykos-run,
+                                            DATA-backed state (epilykos-data-layout,
+                                            fstab binds), machine ID, zram,
                                             RAUC system.conf, fw_env.config,
                                             network/mDNS, iwd, Podman storage,
                                             Wi-Fi setup (epilykos-wifi-import,

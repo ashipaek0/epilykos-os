@@ -161,9 +161,12 @@ os/
                                            and builds against this tree
 ```
 
-Units are enabled by `usr/lib/systemd/system-preset/50-epilykos.preset`,
-not by `.wants` symlinks: Buildroot runs `systemctl preset-all` when it
-assembles the rootfs, which removes symlinks the presets don't ask for.
+Units are enabled (or kept off) by
+`usr/lib/systemd/system-preset/50-epilykos.preset`, not by `.wants`
+symlinks: Buildroot runs `systemctl preset-all` when it assembles the
+rootfs, and that decides. systemd 258 has no catch-all "disable *", so a
+unit no preset mentions is enabled; anything that must stay off (OpenSSH's
+stock `sshd.service`) is disabled there explicitly.
 
 ## Building
 

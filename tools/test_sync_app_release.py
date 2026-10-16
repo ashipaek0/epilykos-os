@@ -88,6 +88,11 @@ try:
     assert v.returncode == 0, v.stderr
     ok('epilykos-only build (no sidecar) -> manifest without bms-bridge, validator passes')
 
+    r = sync(tmp, payload(bms=None, app='3', commit='3' * 40, version='1.0.4-dev+3333333'))
+    assert r.returncode == 0, r.stderr
+    assert yaml.safe_load((tmp / 'manifests/dev.yaml').read_text())['release'] == '1.0.4-dev+3333333'
+    ok('dev build that names itself 1.0.4-dev+<sha> -> release kept as is, not doubled')
+
     r = sync(tmp, payload(ref='main', bms=None, app='2', commit='2' * 40, version='2.9.0'))
     assert r.returncode == 0, r.stderr
     assert set(yaml.safe_load((tmp / 'manifests/stable.yaml').read_text())['images']) == {'epilykos'}

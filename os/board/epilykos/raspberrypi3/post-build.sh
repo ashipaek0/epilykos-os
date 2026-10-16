@@ -101,8 +101,10 @@ case "${IMAGE_ID}" in
 	*) echo "post-build: could not derive the image ID" >&2; exit 1 ;;
 esac
 
-# The OS build's own version: the commit this image was built from.
-OS_VERSION=$(git -C "${REPO_DIR}" describe --always --dirty 2>/dev/null || echo unknown)
+# The OS build's own version. CI passes the version it chose (tools/os_version.py: 0.2, or
+# 0.3-dev+abc1234 for a build run by hand); a local build describes itself
+# from the version tags, e.g. v0.2-3-gabc1234.
+OS_VERSION=${EPILYKOS_OS_VERSION:-$(git -C "${REPO_DIR}" describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo unknown)}
 
 cat > "${APP_DIR}/image.env" <<-ENV
 	# Written at image build time by post-build.sh from manifests/${CHANNEL}.yaml.

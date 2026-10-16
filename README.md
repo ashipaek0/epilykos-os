@@ -44,6 +44,8 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 
 Each Epilykos image build opens a pull request that pins the new image digests. Merging it accepts that release for its channel.
 
+**Versions.** Each OS image built from `main` is the next version, `v0.1`, `v0.2` and so on, and gets a GitHub Release with the SD card image attached. For a bigger jump, go to **Releases → Draft a new release**, type a new tag such as `v1.0` on `main` and publish it. That build is 1.0, and the next one is 1.1. A build run by hand on another branch shows the version it leads to, e.g. `0.3-dev+abc1234`. Appliances never order releases by these numbers; they use the manifest sequence (C-UPDATE-004).
+
 ## Development
 
 ```bash

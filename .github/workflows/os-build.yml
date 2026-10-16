@@ -33,6 +33,10 @@ on:
         description: 'Skip the build and boot-test the image from this earlier run id'
         required: false
         default: ''
+  # A release you create on GitHub (Releases -> Draft a new release, tag
+  # v1.0 on main) builds that version; later builds of main count on from it.
+  release:
+    types: [published]
   push:
     branches: [main]
     paths:
@@ -43,20 +47,48 @@ on:
 permissions:
   contents: read
 
+# One build of main at a time, so two quick merges never get the same version.
+concurrency:
+  group: os-build-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   BOARD: ${{ github.event.inputs.board || 'raspberrypi3' }}
   # main ships the stable application release; anything else (a manual
   # run on dev or a feature branch) preloads the dev manifest unless the
   # run asks for stable.
-  EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || (github.ref == 'refs/heads/main' && 'stable' || 'dev') }}
+  EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
 
 jobs:
   build:
-    if: ${{ !github.event.inputs.image_from_run }}
+    if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_new: ${{ steps.version.outputs.is_new }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # tags and history, for the version
+
+      # v0.1, v0.2 … on main; the tag you typed for a release; 0.3-dev+abc1234
+      # for a build run by hand on another branch (tools/os_version.py).
+      - name: Version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then v="$(python3 tools/os_version.py release "$RELEASE_TAG")"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then v="$(python3 tools/os_version.py main)"
+          else v="$(python3 tools/os_version.py dev)"; fi
+          echo "$v"
+          version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' <<<"$v")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag"] or "")' <<<"$v")" >> "$GITHUB_OUTPUT"
+          echo "is_new=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["is_new"]).lower())' <<<"$v")" >> "$GITHUB_OUTPUT"
+          echo "EPILYKOS_OS_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Free up disk space
         run: |
@@ -327,3 +359,32 @@ jobs:
           echo "$LOG" | grep -q "Mounted root (ext4 filesystem) readonly" || { echo "::error::the root filesystem was not mounted read-only"; fail=1; }
           echo "$LOG" | grep -E "Failed to start|FAILED" | head -20
           exit $fail
+
+  # A new version of main, or a release you created: put the SD card image on
+  # its GitHub Release, only once the image built and booted under QEMU, so a
+  # failed build never uses up a number. Releases made with GITHUB_TOKEN do
+  # not start this workflow again.
+  release:
+    needs: [build, qemu-smoke-test]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.qemu-smoke-test.result == 'success' && (needs.build.outputs.is_new == 'true' || github.event_name == 'release') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-sdcard
+          path: artifact
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          file="epilykos-os-v${VERSION}-${BOARD}.img.zst"
+          mv artifact/sdcard.img.zst "$file"
+          if [ "$GITHUB_EVENT_NAME" != release ]; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "EpilykosOS $VERSION" --generate-notes --latest
+          fi
+          gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber

@@ -18,3 +18,4 @@ test:
 	$(PYTHON) tools/test_wifi_provisioning.py
 	$(PYTHON) tools/test_host_actions.py
 	$(PYTHON) tools/test_app_update.py
+	$(PYTHON) tools/test_os_version.py

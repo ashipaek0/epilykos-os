@@ -15,6 +15,20 @@
 set -e
 . /usr/lib/epilykos/image.env
 
+# An application update installed from Epilykos settings (epilykos_update)
+# names its image in active.env on DATA. It is used only when it is at least
+# as new as what this OS slot preloaded, and only once it is in storage;
+# otherwise the preloaded image runs. Parsed, never sourced.
+ACTIVE=/data/epilykos/updater/active.env
+if [ -f "${ACTIVE}" ]; then
+	active_id=$(sed -n 's/^EPILYKOS_ACTIVE_IMAGE_ID=\([0-9a-f]\{64\}\)$/\1/p' "${ACTIVE}")
+	active_seq=$(sed -n 's/^EPILYKOS_ACTIVE_SEQUENCE=\([0-9]\{1,9\}\)$/\1/p' "${ACTIVE}")
+	if [ -n "${active_id}" ] && [ -n "${active_seq}" ] &&
+		[ "${active_seq}" -ge "${EPILYKOS_SEQUENCE:-0}" ] && podman image exists "${active_id}"; then
+		EPILYKOS_IMAGE_ID=${active_id}
+	fi
+fi
+
 DIALOUT_GID=$(awk -F: '$1 == "dialout" { print $3 }' /etc/group)
 
 set -- \

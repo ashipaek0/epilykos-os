@@ -8,13 +8,13 @@ writes firstrun.sh to the BOOT partition, and EpilykosOS imports the Wi-Fi
 settings from it on first boot (epilykos-wifi-import). Nothing in
 firstrun.sh is executed.
 
-    tools/imager_os_list.py --image sdcard.img --download sdcard.img.xz \\
-        --url https://.../sdcard.img.xz > epilykos-imager.json
+    tools/imager_os_list.py --image sdcard.img --download sdcard.img.zst \\
+        --url https://.../sdcard.img.zst > epilykos-imager.json
     rpi-imager --repo epilykos-imager.json        # or a URL to it
 
 --image is the uncompressed image (for the size and SHA-256 Imager checks
 after writing); --download is the file at --url (for the download size).
-Prefer .xz: Imager reads .zip, .gz and .xz everywhere, .zst only since 1.7.
+Releases use the build's .zst (Imager 1.7 and later read it).
 """
 import argparse
 import datetime

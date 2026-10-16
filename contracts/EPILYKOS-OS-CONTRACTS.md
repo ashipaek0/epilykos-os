@@ -407,7 +407,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Stable releases SHOULD carry a vX.Y.Z git tag in the originating repository. The tag and release string are descriptive; the manifest sequence remains the only ordering primitive (C-UPDATE-002).
 - Mutable tags (latest, dev) MAY be used to discover a build but MUST be resolved to a recorded digest before any manifest or image preload references it.
 - Merging dev into main in the application repository is the release: CI MUST then tag vX.Y.Z, publish the digest records, update and merge the stable application manifest in epilykos-os, and build the stable OS image, with no further manual step. A failing check at any step stops the release there.
-- Stable OS images are published as GitHub Releases of epilykos-os: the SD card image as .zst and .xz, and a Raspberry Pi Imager OS list (the newest release's list is at releases/latest/download/epilykos-os-imager.json). Test builds from dev and other branches are CI artifacts only, kept 14 days.
+- Stable OS images are published as GitHub Releases of epilykos-os: the SD card image (.zst) and a Raspberry Pi Imager OS list (the newest release's list is at releases/latest/download/epilykos-os-imager.json). Test builds from dev and other branches are CI artifacts only, kept 14 days.
 
 **Implementation status**
 
@@ -921,7 +921,7 @@ The architecture is ready for implementation when all Stage 0 decisions are froz
 ### 0.6.1-draft
 
 - C-HW-001: one image per board (Pi 4 and Pi 5 later, not yet built), not one image for all boards.
-- C-RELEASE-001: stable images are hosted as GitHub Releases with .zst, .xz and a Raspberry Pi Imager OS list; test builds stay 14-day CI artifacts.
+- C-RELEASE-001: stable images are hosted as GitHub Releases with the .zst image and a Raspberry Pi Imager OS list; test builds stay 14-day CI artifacts.
 
 ### 0.6.0-draft
 

@@ -1,0 +1,19 @@
+# U-Boot config fragment over upstream rpi_3_defconfig.
+#
+# Upstream keeps the Pi's environment in uboot.env on the FAT partition.
+# EpilykosOS keeps it raw on the SD card instead, in two redundant copies
+# (a power cut during saveenv leaves the other copy intact), in the gap
+# between the MBR and the first partition (genimage.cfg starts BOOT at
+# 8 MiB). /etc/fw_env.config describes the same two locations for
+# fw_printenv/fw_setenv, which RAUC's uboot backend uses.
+#
+# The image ships both copies zeroed: U-Boot finds no valid CRC, starts
+# from its built-in default environment, and boot.cmd initialises the
+# RAUC variables and saves them on first boot.
+# CONFIG_ENV_IS_IN_FAT is not set
+CONFIG_ENV_IS_IN_MMC=y
+CONFIG_ENV_MMC_DEVICE_INDEX=0
+CONFIG_ENV_SIZE=0x4000
+CONFIG_ENV_OFFSET=0x400000
+CONFIG_ENV_REDUNDANT=y
+CONFIG_ENV_OFFSET_REDUND=0x404000

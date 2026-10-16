@@ -1,0 +1,12 @@
+[Unit]
+Description=EpilykosOS: grow the DATA partition to fill the SD card
+RequiresMountsFor=/data
+Before=epilykos.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/epilykos-data-grow
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

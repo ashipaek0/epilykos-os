@@ -1,0 +1,21 @@
+# Units EpilykosOS enables. Buildroot runs `systemctl preset-all` when it
+# assembles the rootfs and systemd's own presets end in "disable *", so
+# anything not listed here (or in systemd's 90-systemd.preset, which
+# already enables networkd, resolved and timesyncd) is left off. Enable
+# symlinks dropped into the overlay by hand do not survive that step.
+enable epilykos-data-grow.service
+enable epilykos.service
+enable epilykos-mark-good.service
+enable bluetooth.service
+enable rauc.service
+enable systemd-networkd.service
+enable systemd-resolved.service
+enable systemd-timesyncd.service
+# Console logins: the header serial port and the HDMI screen. There is no
+# SSH (C-ACCESS-001).
+enable serial-getty@.service ttyS1
+enable getty@.service tty1
+# Wi-Fi and its setup paths (BOOT files, Bluetooth).
+enable iwd.service
+enable epilykos-wifi-import.service
+enable epilykos-improv.service

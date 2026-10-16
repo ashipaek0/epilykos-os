@@ -1,0 +1,33 @@
+[Unit]
+Description=Epilykos energy monitor
+Documentation=https://github.com/ashipaek0/epilykos
+# Local monitoring must not wait for the network (C-NET-001): only the
+# local filesystems, DATA's first-boot grow and BlueZ come first.
+RequiresMountsFor=/data
+Wants=bluetooth.service
+After=epilykos-data-grow.service bluetooth.service network.target
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=/usr/lib/epilykos/image.env
+# First boot loads the image archive (a few minutes on a Pi 3B SD card)
+# and the app may migrate its database before /healthz answers.
+TimeoutStartSec=20min
+ExecStartPre=/usr/bin/epilykos-image-load
+ExecStart=/usr/bin/epilykos-run
+ExecStop=/usr/bin/podman rm -v -f -i --cidfile=/run/epilykos.cid
+ExecStopPost=-/usr/bin/podman rm -v -f -i --cidfile=/run/epilykos.cid
+Type=notify
+NotifyAccess=all
+KillMode=mixed
+Delegate=yes
+SyslogIdentifier=epilykos
+TimeoutStopSec=60
+Restart=always
+RestartSec=10
+# The container is the preferred OOM victim, never journald or Podman
+# (C-RESOURCE-001); --oom-score-adj in epilykos-run sets the same.
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# Wi-Fi (joined by iwd): DHCP and mDNS like Ethernet. Ethernet's lower
+# route metric keeps it preferred when both are up.
+[Match]
+Type=wlan
+
+[Network]
+DHCP=yes
+MulticastDNS=yes
+LinkLocalAddressing=yes
+IgnoreCarrierLoss=3s
+
+[DHCPv4]
+RouteMetric=600
+UseDomains=yes

@@ -16,6 +16,8 @@
 #   BUILD_DIR      where the Buildroot release is unpacked (default: os/build)
 #   BR2_DL_DIR     Buildroot's own package-source download cache
 #   MAKE_JOBS      parallel jobs (default: nproc)
+#   EPILYKOS_CHANNEL  application manifest to preload, dev or stable
+#                  (default: dev; read by the board's post-build.sh)
 set -e
 
 BOARD="${1:-raspberrypi3}"

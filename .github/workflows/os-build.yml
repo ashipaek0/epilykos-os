@@ -12,8 +12,9 @@ name: OS image build
 # step assembled a partition-correct sdcard.img, and a few structural
 # checks below hold. It does NOT mean the image boots on a real Pi 3B —
 # that's C-BOOT-000, and needs the real hardware this environment
-# doesn't have. See the qemu-smoke-test job for a best-effort
-# kernel-boots-at-all check that is not a substitute for that evidence.
+# doesn't have. The qemu-smoke-test job boots the image through U-Boot
+# under QEMU as a best-effort check; it is not a substitute for that
+# evidence.
 
 on:
   workflow_dispatch:
@@ -22,17 +23,36 @@ on:
         description: 'Board defconfig to build (os/configs/epilykos_<board>_defconfig)'
         required: false
         default: raspberrypi3
+      channel:
+        description: 'Application manifest to preload (manifests/<channel>.yaml)'
+        required: false
+        default: dev
+        type: choice
+        options: [dev, stable]
+      image_from_run:
+        description: 'Skip the build and boot-test the image from this earlier run id'
+        required: false
+        default: ''
   push:
     branches: [main]
     paths:
       - 'os/**'
+      - 'manifests/stable.yaml'
       - '.github/workflows/os-build.yml'
 
 permissions:
   contents: read
 
+env:
+  BOARD: ${{ github.event.inputs.board || 'raspberrypi3' }}
+  # main ships the stable application release; anything else (a manual
+  # run on dev or a feature branch) preloads the dev manifest unless the
+  # run asks for stable.
+  EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || (github.ref == 'refs/heads/main' && 'stable' || 'dev') }}
+
 jobs:
   build:
+    if: ${{ !github.event.inputs.image_from_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -41,9 +61,9 @@ jobs:
       - name: Free up disk space
         run: |
           # A full Buildroot build (toolchain + kernel + rauc + podman +
-          # systemd, two rootfs copies) needs real headroom; the default
-          # runner image is otherwise too full of things this build
-          # never touches.
+          # systemd, two rootfs copies, the preloaded application image)
+          # needs real headroom; the default runner image is otherwise too
+          # full of things this build never touches.
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
             /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
@@ -56,59 +76,125 @@ jobs:
             build-essential bc bison flex cpio unzip rsync file wget git \
             python3 python3-dev perl patch tar bzip2 lzop lz4 zstd \
             libssl-dev libncurses-dev device-tree-compiler \
-            genimage mtools dosfstools e2fsprogs
+            genimage mtools dosfstools e2fsprogs skopeo
 
-      - name: Cache Buildroot package downloads
-        uses: actions/cache@v4
+      # Restore/save as separate steps so the caches are kept even when the
+      # build fails: a failure ~80 minutes in shouldn't make the retry start
+      # from nothing (actions/cache only saves on success).
+      - name: Restore Buildroot package downloads
+        id: dl-cache
+        uses: actions/cache/restore@v4
         with:
           path: os/build/dl
-          key: os-dl-${{ hashFiles('os/configs/epilykos_raspberrypi3_defconfig', 'os/board/epilykos/raspberrypi3/linux.fragment') }}
+          key: os-dl-${{ hashFiles('os/configs/epilykos_raspberrypi3_defconfig', 'os/board/epilykos/raspberrypi3/linux.fragment', 'os/board/epilykos/raspberrypi3/uboot.fragment') }}
           restore-keys: |
             os-dl-
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.buildroot-ccache
-          key: os-ccache-${{ runner.os }}-${{ github.event.inputs.board || 'raspberrypi3' }}-${{ hashFiles('os/configs/epilykos_raspberrypi3_defconfig', 'os/board/epilykos/raspberrypi3/linux.fragment') }}
+          key: os-ccache-${{ runner.os }}-${{ env.BOARD }}-${{ github.run_id }}
           restore-keys: |
-            os-ccache-${{ runner.os }}-${{ github.event.inputs.board || 'raspberrypi3' }}-
+            os-ccache-${{ runner.os }}-${{ env.BOARD }}-
             os-ccache-${{ runner.os }}-
 
       - name: Build
-        run: os/build.sh "${{ github.event.inputs.board || 'raspberrypi3' }}"
+        id: build
+        run: os/build.sh "${BOARD}"
+
+      - name: Save Buildroot package downloads
+        if: always() && steps.dl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: os/build/dl
+          key: ${{ steps.dl-cache.outputs.cache-primary-key }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Structural checks on the produced image
         run: |
           set -e
-          BOARD="${{ github.event.inputs.board || 'raspberrypi3' }}"
           IMG=$(find os/build -path '*/output/images/sdcard.img' -print -quit)
           test -n "$IMG" || { echo "sdcard.img not produced"; exit 1; }
-          echo "Image: $IMG ($(du -h "$IMG" | cut -f1))"
-
-          # Five real partitions: boot, uboot-env, rootfs-a, rootfs-b, data.
-          # MBR only allows 4 primary partitions, so genimage correctly
-          # wraps the 4th and 5th in an extended/logical pair — that's a
-          # 6th line in fdisk's listing (the "W95 Ext'd (LBA)" container)
-          # for 5 actual partitions, not a bug. Exclude it before counting
-          # (previous attempt matched "Extd" — fdisk actually prints
-          # "Ext'd" with an apostrophe, so that grep matched nothing).
-          PARTS=$(fdisk -l "$IMG" | grep "^${IMG}[0-9p]*[0-9]" | grep -cv "Ext")
-          test "$PARTS" -eq 5 || { echo "expected 5 real partitions, found $PARTS"; fdisk -l "$IMG"; exit 1; }
-
           IMAGES_DIR=$(dirname "$IMG")
-          test -f "$IMAGES_DIR/rootfs-b.ext4" || { echo "rootfs-b.ext4 missing"; exit 1; }
-          e2label "$IMAGES_DIR/rootfs.ext4" | grep -qx RootFS-A || { echo "rootfs.ext4 not labeled RootFS-A"; exit 1; }
-          e2label "$IMAGES_DIR/rootfs-b.ext4" | grep -qx RootFS-B || { echo "rootfs-b.ext4 not labeled RootFS-B"; exit 1; }
+          TARGET_DIR=$(dirname "$IMAGES_DIR")/target
+          echo "Image: $IMG ($(du -h --apparent-size "$IMG" | cut -f1))"
+          fdisk -l "$IMG"
+
+          # Four primary MBR partitions (BOOT, ROOT-A, ROOT-B, DATA) and the
+          # fixed disk signature that boot.cmd, fstab and RAUC rely on for
+          # PARTUUID=45504c4b-0N.
+          PARTS=$(fdisk -l "$IMG" | grep -c "^${IMG}[0-9]")
+          test "$PARTS" -eq 4 || { echo "expected 4 partitions, found $PARTS"; exit 1; }
+          fdisk -l "$IMG" | grep -q "Disk identifier: 0x45504c4b" || { echo "disk signature is not 0x45504c4b"; exit 1; }
+
+          e2label "$IMAGES_DIR/rootfs.ext4" | grep -qx ROOT-A || { echo "rootfs.ext4 not labelled ROOT-A"; exit 1; }
+          e2label "$IMAGES_DIR/rootfs-b.ext4" | grep -qx ROOT-B || { echo "rootfs-b.ext4 not labelled ROOT-B"; exit 1; }
+          e2label "$IMAGES_DIR/data.ext4" | grep -qx DATA || { echo "data.ext4 not labelled DATA"; exit 1; }
+
+          # The U-Boot environment area (4 MiB, two 16 KiB copies) must ship
+          # blank so U-Boot starts from its defaults, not a stale env.
+          test -z "$(dd if="$IMG" bs=16K skip=256 count=2 status=none | tr -d '\0' | head -c1)" \
+            || { echo "U-Boot environment area is not blank"; exit 1; }
+
+          # Everything the Pi firmware and U-Boot load from BOOT.
+          BOOT_START=$(fdisk -o Device,Start -l "$IMG" | awk -v dev="${IMG}1" '$1==dev {print $2}')
+          for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
+            mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
+          done
+          mtype -i "${IMG}@@$((BOOT_START * 512))" ::config.txt | grep -qx 'arm_64bit=1' || { echo "config.txt is not 64-bit"; exit 1; }
+
+          # 64-bit userland, and the application image actually preloaded.
+          file -L "$TARGET_DIR/usr/bin/podman" | grep -q 'ARM aarch64' || { echo "podman is not aarch64"; exit 1; }
+          test -s "$TARGET_DIR/usr/lib/epilykos/epilykos.oci.tar" || { echo "Epilykos image archive missing"; exit 1; }
+          cat "$TARGET_DIR/usr/lib/epilykos/image.env"
+          grep -q "^EPILYKOS_CHANNEL=${EPILYKOS_CHANNEL}$" "$TARGET_DIR/usr/lib/epilykos/image.env" || { echo "wrong channel preloaded"; exit 1; }
+
+          # Wi-Fi: radio firmware, regulatory database, and the Python the
+          # setup tools run on (with dbus-fast for Bluetooth).
+          ls "$TARGET_DIR"/lib/firmware/brcm/brcmfmac43430-sdio*.bin >/dev/null || { echo "Wi-Fi firmware missing"; exit 1; }
+          ls "$TARGET_DIR"/lib/firmware/brcm/BCM43430A1*.hcd >/dev/null || { echo "Bluetooth firmware missing"; exit 1; }
+          test -f "$TARGET_DIR/lib/firmware/regulatory.db" || { echo "wireless regulatory database missing"; exit 1; }
+          ls -d "$TARGET_DIR"/usr/lib/python3*/site-packages/dbus_fast >/dev/null || { echo "dbus-fast missing"; exit 1; }
+          test -x "$TARGET_DIR/usr/bin/iw" || { echo "iw missing"; exit 1; }
+
+          # Units the appliance depends on are enabled. Buildroot runs
+          # `systemctl preset-all` on a per-filesystem copy of the target
+          # directory, so the enable links exist only inside rootfs.ext4,
+          # not in output/target: read them from the image.
+          enabled() { debugfs -R "ls /etc/systemd/system/$1" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | tr -s ' ' '\n'; }
+          WANTS=$(enabled multi-user.target.wants)
+          for u in epilykos.service epilykos-mark-good.service epilykos-data-grow.service \
+                   systemd-networkd.service iwd.service epilykos-wifi-import.service \
+                   epilykos-improv.service; do
+            echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
+          done
+          enabled bluetooth.target.wants | grep -qx bluetooth.service || { echo "bluetooth.service is not enabled in rootfs.ext4"; exit 1; }
+          enabled getty.target.wants | grep -qx 'serial-getty@ttyS1.service' || { echo "no serial console login in rootfs.ext4"; exit 1; }
 
           echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
 
+      # Uploaded whenever the build itself succeeded, even if a structural
+      # check above failed, so a two-hour build is never thrown away; the
+      # job still fails in that case.
       - name: Compress image for upload
-        run: zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
+        if: always() && steps.build.outcome == 'success'
+        run: |
+          IMAGES_DIR=$(dirname "$(find os/build -path '*/output/images/sdcard.img' -print -quit)")
+          echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
+          zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
 
       - uses: actions/upload-artifact@v4
+        if: always() && steps.build.outcome == 'success'
         with:
-          name: epilykos-${{ github.event.inputs.board || 'raspberrypi3' }}-sdcard
+          name: epilykos-${{ env.BOARD }}-sdcard
           path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
           retention-days: 14
           if-no-files-found: error
@@ -116,7 +202,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: epilykos-${{ github.event.inputs.board || 'raspberrypi3' }}-build-log
+          name: epilykos-${{ env.BOARD }}-build-log
           path: |
             os/build/buildroot-*/output/build/build-time.log
             os/build/buildroot-*/.config
@@ -125,51 +211,92 @@ jobs:
 
   qemu-smoke-test:
     needs: build
+    # Also after a failed structural check (the image is uploaded whenever
+    # the build itself succeeded), or with the build skipped when testing
+    # an earlier run's image (image_from_run).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Best-effort only: QEMU's raspi3b model does not reproduce the real
-    # Pi firmware boot path (bootcode.bin/start.elf), so this boots the
-    # kernel directly rather than exercising boot.cmd/RAUC at all. A
-    # green result here means "the kernel this build produced isn't
-    # dead on arrival" — nothing more, and specifically not C-BOOT-000.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    # Best effort, two boots, not C-BOOT-000 evidence:
+    # 1. U-Boot: QEMU's raspi3b has no VideoCore firmware, so it starts
+    #    u-boot.bin directly. The firmware normally muxes the GPIOs (the
+    #    console UART, the SD card's controller); without it U-Boot may
+    #    print on the other UART or not see the card, so both UARTs are
+    #    logged and a miss here is reported, not failed.
+    # 2. Kernel: QEMU loads the image's own Image + DTB and boots
+    #    root=PARTUUID=45504c4b-02 from the SD card, exactly the command
+    #    line boot.scr builds. This checks the kernel, the root mount and
+    #    systemd bringing up the appliance's units, and must pass.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
       - name: Install QEMU
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-arm zstd
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools zstd
 
       - uses: actions/download-artifact@v4
         with:
-          name: epilykos-${{ github.event.inputs.board || 'raspberrypi3' }}-sdcard
+          name: epilykos-${{ env.BOARD }}-sdcard
           path: artifact
+          run-id: ${{ github.event.inputs.image_from_run || github.run_id }}
+          github-token: ${{ github.token }}
 
-      - name: Extract kernel + dtb from the boot partition
+      - name: Prepare image
         run: |
           set -e
           zstd -d artifact/sdcard.img.zst -o sdcard.img
-          sudo apt-get install -y --no-install-recommends mtools
-          # -o Device,Start avoids positional parsing of fdisk's human
-          # table, whose columns shift when the bootable-flag ("*")
-          # column is present.
           BOOT_START=$(fdisk -o Device,Start -l sdcard.img | awk -v dev="sdcard.img1" '$1==dev {print $2}')
-          BOOT_OFFSET=$((BOOT_START * 512))
-          # bcm2837-rpi-3-b.dtb, no subdirectory (kernel DTB install is
-          # flattened; see genimage.cfg's own note).
-          mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::zImage ./zImage
-          mcopy -i "sdcard.img@@${BOOT_OFFSET}" ::bcm2837-rpi-3-b.dtb ./bcm2837-rpi-3-b.dtb
+          for f in u-boot.bin Image bcm2837-rpi-3-b.dtb; do
+            mcopy -i "sdcard.img@@$((BOOT_START * 512))" "::$f" "./$f"
+          done
+          # QEMU's SD card model needs a power-of-two size.
+          truncate -s 4G sdcard.img
+          cp --sparse=always sdcard.img sdcard-kernel.img
 
-      - name: Boot under QEMU raspi3b, watch for a panic or a prompt
+      - name: "Boot 1: through U-Boot (reported, not gating)"
         run: |
           set +e
-          timeout 90 qemu-system-arm -M raspi3b -m 1024 \
-            -kernel zImage -dtb bcm2837-rpi-3-b.dtb \
-            -append "console=ttyAMA0 root=/dev/mmcblk0p3 rootwait" \
-            -serial file:serial.log -display none -no-reboot
-          echo "--- serial log ---"
-          cat serial.log || true
-          if grep -qiE "kernel panic|Oops" serial.log; then
-            echo "kernel panicked"; exit 1
+          timeout 300 qemu-system-aarch64 -M raspi3b -m 1G \
+            -kernel u-boot.bin \
+            -drive if=sd,format=raw,file=sdcard.img \
+            -serial file:uboot-uart0.log -serial file:uboot-uart1.log \
+            -display none -no-reboot
+          for u in uart0 uart1; do echo "--- $u ---"; cat uboot-$u.log; echo; done
+          if cat uboot-uart*.log | grep -q "EpilykosOS: booting slot A"; then
+            echo "U-Boot ran boot.scr and chose slot A."
+          else
+            echo "::warning::U-Boot under QEMU did not reach boot.scr (see the logs above); this needs the real Pi firmware"
           fi
-          grep -qi "Linux version" serial.log || { echo "kernel never even logged its own version line"; exit 1; }
+
+      - name: "Boot 2: kernel and root filesystem (gating)"
+        run: |
+          set +e
+          # The command line boot.scr builds, plus the kernel log mirrored to
+          # the PL011 (keep_bootcon) and service logs forwarded to it, because
+          # QEMU's mini-UART clock setup can differ from the real firmware's.
+          timeout 900 qemu-system-aarch64 -M raspi3b -m 1G \
+            -kernel Image -dtb bcm2837-rpi-3-b.dtb \
+            -append "root=PARTUUID=45504c4b-02 rauc.slot=A rootfstype=ext4 rootwait rw console=ttyS1,115200 earlycon=pl011,mmio32,0x3f201000 keep_bootcon systemd.journald.forward_to_kmsg=1 systemd.log_target=kmsg" \
+            -drive if=sd,format=raw,file=sdcard-kernel.img \
+            -serial file:kernel-uart0.log -serial file:kernel-uart1.log \
+            -display none -no-reboot &
+          QEMU=$!
+          for i in $(seq 1 180); do
+            sleep 5
+            cat kernel-uart*.log 2>/dev/null | grep -qE "login:|Kernel panic|Reached target .*Multi-User" && break
+            kill -0 "$QEMU" 2>/dev/null || break
+          done
+          sleep 20
+          kill "$QEMU" 2>/dev/null
+          for u in uart0 uart1; do echo "--- $u ---"; cat kernel-$u.log; echo; done
+          LOG=$(cat kernel-uart*.log)
+          fail=0
+          echo "$LOG" | grep -q "Linux version" || { echo "::error::kernel never started"; fail=1; }
+          echo "$LOG" | grep -qiE "kernel panic|Oops" && { echo "::error::kernel panicked"; fail=1; }
+          echo "$LOG" | grep -qE "EXT4-fs \(mmcblk[0-9]p2\): mounted|VFS: Mounted root" || { echo "::error::ROOT-A (PARTUUID=45504c4b-02) was not mounted"; fail=1; }
+          echo "$LOG" | grep -qE "Reached target .*Multi-User|login:" || { echo "::error::systemd did not reach multi-user"; fail=1; }
+          echo "$LOG" | grep -E "Failed to start|FAILED" | head -20
+          exit $fail

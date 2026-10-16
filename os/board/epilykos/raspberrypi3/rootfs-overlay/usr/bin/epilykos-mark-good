@@ -1,23 +1,44 @@
 #!/bin/sh
-# Boot-health check (C-BOOT-003) — run once per boot, late enough that a
-# failure here still leaves boot_tries available for U-Boot to fall back
-# on next power-cycle.
+# Boot-health gate (C-BOOT-003). Marks the booted RAUC slot good only
+# when all of these hold:
+#   - multi-user userspace is reached (this runs after multi-user.target)
+#   - DATA is mounted at /data
+#   - Podman is operational
+#   - the Epilykos container reports healthy (its /healthz, C-RUNTIME-002)
+# Network, Internet, Bluetooth and inverter availability are deliberately
+# not checked (C-BOOT-003, C-NET-001).
 #
-# STATUS: untested scaffold. "Mark-good conditions" (C-BOOT-003) names
-# what MUST be true before calling this a good boot; this only checks the
-# ones the OS layer alone can see. Whatever the appliance layer decides
-# (e.g. Epilykos's own /healthz, once it's wired up here) belongs
-# alongside these, not instead of them.
-set -e
+# If the conditions don't hold within the timeout, the slot stays
+# unconfirmed and U-Boot's attempt counter decides what the next boot
+# does. Nothing here reboots the device.
+set -u
 
-# systemd itself reached a stable target with nothing failed. "degraded"
-# (systemd's own term for "at least one unit failed") is deliberately not
-# accepted here.
-STATE=$(systemctl is-system-running --wait 2>/dev/null || true)
-if [ "${STATE}" != "running" ]; then
-	echo "epilykos-mark-good: system state is '${STATE}', not 'running'; not marking good" >&2
-	systemctl --failed --no-legend >&2 || true
+# First boot of a slot loads the application image and may migrate the
+# database, so this is generous. The frozen value is C-BOOT-003's open
+# "health-gate timeout".
+TIMEOUT=${EPILYKOS_HEALTH_TIMEOUT:-1200}
+STEP=10
+waited=0
+
+fail() {
+	echo "epilykos-mark-good: $1; slot not marked good" >&2
 	exit 1
-fi
+}
 
+findmnt -n /data >/dev/null || fail "/data is not mounted"
+podman info >/dev/null 2>&1 || fail "podman is not operational"
+
+while :; do
+	status=$(podman inspect --format '{{.State.Health.Status}}' epilykos 2>/dev/null || true)
+	if [ "${status}" = "healthy" ]; then
+		break
+	fi
+	if [ "${waited}" -ge "${TIMEOUT}" ]; then
+		fail "epilykos container is '${status:-not running}' after ${TIMEOUT}s"
+	fi
+	sleep "${STEP}"
+	waited=$((waited + STEP))
+done
+
+echo "epilykos-mark-good: system healthy after ${waited}s, marking slot good"
 rauc status mark-good

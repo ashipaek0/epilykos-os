@@ -28,6 +28,16 @@ Environment=SQLITE_SYNCHRONOUS=FULL
 HealthCmd=node -e "fetch('http://127.0.0.1:3000/healthz')"
 """ % GOOD_DIGEST
 
+LAUNCHER_PATH = 'os/board/testboard/rootfs-overlay/usr/bin/epilykos-run'
+GOOD_LAUNCHER = """#!/bin/sh
+set -- --name epilykos \\
+	--volume /data/epilykos/app-data:/app/data \\
+	--env LOG_TO_FILE=false \\
+	--env SQLITE_SYNCHRONOUS=FULL \\
+	--health-cmd "node -e \\"fetch('http://127.0.0.1:3000/healthz')\\""
+exec podman run "$@" "${EPILYKOS_IMAGE_ID}"
+"""
+
 
 def manifest(channel='stable', digest=GOOD_DIGEST, seq=3):
     return {'schema': 1, 'release': '2.8.0', 'channel': channel, 'sequence': seq,
@@ -80,6 +90,20 @@ run('epilykos quadlet without LOG_TO_FILE=false',
     files={'quadlets/epilykos.container': GOOD_QUADLET.replace('Environment=LOG_TO_FILE=false\n', '')}, expect='LOG_TO_FILE=false')
 run('epilykos quadlet without /healthz',
     files={'quadlets/epilykos.container': GOOD_QUADLET.replace('/healthz', '/api/ping')}, expect='/healthz')
+run('valid appliance launcher passes', files={LAUNCHER_PATH: GOOD_LAUNCHER})
+run('real os/ launcher passes', files={LAUNCHER_PATH: (ROOT / 'os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-run').read_text()})
+run('launcher with --privileged', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('--name epilykos', '--name epilykos --privileged')},
+    expect='--privileged')
+run('launcher without LOG_TO_FILE=false', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('LOG_TO_FILE=false', 'LOG_TO_FILE=true')},
+    expect='LOG_TO_FILE=false')
+run('launcher without SQLITE_SYNCHRONOUS', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('SQLITE_SYNCHRONOUS=FULL', 'X=1')},
+    expect='SQLITE_SYNCHRONOUS')
+run('launcher health check not on /healthz', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('/healthz', '/')},
+    expect='/healthz')
+run('launcher without the DATA mount', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('/data/epilykos/app-data:', '/tmp/x:')},
+    expect='/app/data')
+run('launcher starting a tag', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('"${EPILYKOS_IMAGE_ID}"', 'irunmole/epilykos:latest')},
+    expect='EPILYKOS_IMAGE_ID')
 run('manifest without bms-bridge (Bluetooth in the epilykos image) passes',
     files={'manifests/m.yaml': {**manifest(channel='dev'), 'images': {'epilykos': manifest()['images']['epilykos']}}})
 run('legacy bms-bridge entry with a mutable tag still fails',

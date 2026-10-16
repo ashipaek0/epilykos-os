@@ -1,0 +1,15 @@
+# Any wired Ethernet port (the Pi 3B's onboard SMSC LAN9514, or a USB
+# adapter): DHCP, and answer mDNS so the box is reachable as
+# epilykos.local with no setup (C-PROV-001).
+[Match]
+Type=ether
+Name=en* eth*
+
+[Network]
+DHCP=yes
+MulticastDNS=yes
+LinkLocalAddressing=yes
+
+[DHCPv4]
+RouteMetric=100
+UseDomains=yes

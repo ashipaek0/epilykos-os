@@ -1,0 +1,637 @@
+#!/usr/bin/python3
+"""Wi-Fi setup over Bluetooth LE, using the open Improv Wi-Fi protocol
+(https://www.improv-wifi.com/ble/).
+
+A phone or laptop with a Web Bluetooth browser (Chrome on Android, Windows,
+macOS, ChromeOS) opens https://www.improv-wifi.com, picks "Epilykos", and
+sends the Wi-Fi name and password. Home Assistant also discovers Improv
+devices. The box joins the network and answers with the address of the
+Epilykos dashboard. No pairing is needed.
+
+When it advertises (C-PROV-002: setup is available when no usable network
+is configured):
+  - whenever the box has no IPv4 address on any wired or Wi-Fi interface;
+  - for the first 30 minutes after boot while no Wi-Fi network is
+    configured, so a box on Ethernet can still be given Wi-Fi.
+Re-entry after setup through a physical gesture is D-PROV-001 (open).
+
+Credentials go straight into iwd's known-network file on DATA; they are
+never logged.
+"""
+import asyncio
+import fcntl
+import os
+import socket
+import struct
+import sys
+import time
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_wifi as wifi  # noqa: E402
+
+from dbus_fast import BusType, DBusError, Message, MessageType, Variant  # noqa: E402
+from dbus_fast.aio import MessageBus  # noqa: E402
+from dbus_fast.constants import PropertyAccess  # noqa: E402
+from dbus_fast.service import ServiceInterface, dbus_property, method  # noqa: E402
+
+SERVICE_UUID = '00467768-6228-2272-4663-277478268000'
+STATE_UUID = '00467768-6228-2272-4663-277478268001'
+ERROR_UUID = '00467768-6228-2272-4663-277478268002'
+RPC_COMMAND_UUID = '00467768-6228-2272-4663-277478268003'
+RPC_RESULT_UUID = '00467768-6228-2272-4663-277478268004'
+CAPABILITIES_UUID = '00467768-6228-2272-4663-277478268005'
+SERVICE_DATA_UUID = '00004677-0000-1000-8000-00805f9b34fb'
+
+STATE_AUTHORIZED = 0x02
+STATE_PROVISIONING = 0x03
+STATE_PROVISIONED = 0x04
+
+ERROR_NONE = 0x00
+ERROR_INVALID_RPC = 0x01
+ERROR_UNKNOWN_RPC = 0x02
+ERROR_UNABLE_TO_CONNECT = 0x03
+ERROR_UNKNOWN = 0xFF
+
+CMD_WIFI_SETTINGS = 0x01
+CMD_IDENTIFY = 0x02
+CMD_DEVICE_INFO = 0x03
+CMD_SCAN = 0x04
+
+CAP_IDENTIFY = 0x01
+CAP_DEVICE_INFO = 0x02
+CAP_SCAN = 0x04
+
+APP_PATH = '/org/epilykos/improv'
+ADV_PATH = APP_PATH + '/advertisement0'
+NAME_ADV_PATH = APP_PATH + '/advertisement1'
+DEVICE_NAME = 'Epilykos'
+APP_PORT = 3000
+SETUP_WINDOW_S = int(os.environ.get('EPILYKOS_IMPROV_SETUP_WINDOW', '1800'))
+LED = '/sys/class/leds/ACT'
+
+BLUEZ = 'org.bluez'
+IWD = 'net.connman.iwd'
+
+
+def log(msg):
+    print(f'epilykos-improv: {msg}', flush=True)
+
+
+# -- Improv packet format ----------------------------------------------------
+
+def checksum(data: bytes) -> int:
+    return sum(data) & 0xFF
+
+
+class RpcError(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def decode_rpc(packet: bytes):
+    """(command, data) from one complete RPC packet."""
+    if len(packet) < 3 or len(packet) != packet[1] + 3:
+        raise RpcError(ERROR_INVALID_RPC)
+    if checksum(packet[:-1]) != packet[-1]:
+        raise RpcError(ERROR_INVALID_RPC)
+    return packet[0], packet[2:-1]
+
+
+def encode_rpc(command: int, data: bytes) -> bytes:
+    body = bytes([command, len(data)]) + data
+    return body + bytes([checksum(body)])
+
+
+def encode_result(command: int, strings) -> bytes:
+    data = b''
+    for s in strings:
+        b = s.encode('utf-8') if isinstance(s, str) else s
+        data += bytes([len(b)]) + b
+    if len(data) > 255:
+        raise ValueError('RPC result too long')
+    return encode_rpc(command, data)
+
+
+def decode_wifi_settings(data: bytes):
+    """(ssid bytes, password str) from a Send Wi-Fi settings payload."""
+    try:
+        n = data[0]
+        ssid = data[1:1 + n]
+        m = data[1 + n]
+        password = data[2 + n:2 + n + m]
+    except IndexError:
+        raise RpcError(ERROR_INVALID_RPC) from None
+    if len(ssid) != n or len(password) != m or 2 + n + m != len(data) or not ssid:
+        raise RpcError(ERROR_INVALID_RPC)
+    try:
+        return bytes(ssid), password.decode('utf-8')
+    except UnicodeDecodeError:
+        raise RpcError(ERROR_INVALID_RPC) from None
+
+
+class RpcAssembler:
+    """Collects an RPC packet that may arrive in several writes: either as
+    offset writes (long write) or as consecutive writes of 20-byte chunks."""
+
+    def __init__(self, stale_after=3.0):
+        self.buf = bytearray()
+        self.stamp = 0.0
+        self.stale_after = stale_after
+
+    def feed(self, data: bytes, offset: int = 0, now: float = None):
+        now = time.monotonic() if now is None else now
+        if self.buf and now - self.stamp > self.stale_after:
+            self.buf = bytearray()
+        self.stamp = now
+        if offset:
+            self.buf[offset:offset + len(data)] = data
+        elif self.buf and not self._complete():
+            self.buf += data
+        else:
+            self.buf = bytearray(data)
+        if len(self.buf) >= 2 and len(self.buf) >= self.buf[1] + 3:
+            packet = bytes(self.buf[:self.buf[1] + 3])
+            self.buf = bytearray()
+            return packet
+        return None
+
+    def _complete(self):
+        return len(self.buf) >= 2 and len(self.buf) >= self.buf[1] + 3
+
+
+# -- Host state --------------------------------------------------------------
+
+def ipv4_address(ifname: str):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        r = fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', ifname[:15].encode()))  # SIOCGIFADDR
+    except OSError:
+        return None
+    finally:
+        s.close()
+    ip = socket.inet_ntoa(r[20:24])
+    return None if ip.startswith('169.254.') else ip
+
+
+def online_address():
+    for _, name in socket.if_nameindex():
+        if name.startswith(('en', 'eth', 'wl')):
+            ip = ipv4_address(name)
+            if ip:
+                return ip
+    return None
+
+
+def device_model():
+    try:
+        with open('/proc/device-tree/model', 'rb') as f:
+            return f.read().rstrip(b'\0').decode('utf-8', 'replace')
+    except OSError:
+        return 'Raspberry Pi'
+
+
+def os_version():
+    try:
+        with open('/usr/lib/epilykos/image.env') as f:
+            for line in f:
+                if line.startswith('EPILYKOS_OS_VERSION='):
+                    return line.split('=', 1)[1].strip()
+    except OSError:
+        pass
+    return 'dev'
+
+
+async def identify():
+    trigger_path = os.path.join(LED, 'trigger')
+    try:
+        with open(trigger_path) as f:
+            current = next((t[1:-1] for t in f.read().split() if t.startswith('[')), 'none')
+        with open(trigger_path, 'w') as f:
+            f.write('timer')
+        for name in ('delay_on', 'delay_off'):
+            with open(os.path.join(LED, name), 'w') as f:
+                f.write('100')
+        await asyncio.sleep(5)
+        with open(trigger_path, 'w') as f:
+            f.write(current)
+    except OSError as e:
+        log(f'identify: {e}')
+
+
+# -- D-Bus helpers -----------------------------------------------------------
+
+async def call(bus, dest, path, iface, member, signature='', body=(), timeout=30):
+    reply = await asyncio.wait_for(bus.call(Message(
+        destination=dest, path=path, interface=iface, member=member,
+        signature=signature, body=list(body))), timeout)
+    if reply.message_type == MessageType.ERROR:
+        raise DBusError(reply.error_name, reply.body[0] if reply.body else '')
+    return reply.body
+
+
+async def managed_objects(bus, dest):
+    (objs,) = await call(bus, dest, '/', 'org.freedesktop.DBus.ObjectManager', 'GetManagedObjects')
+    return objs
+
+
+async def get_prop(bus, dest, path, iface, name):
+    (v,) = await call(bus, dest, path, 'org.freedesktop.DBus.Properties', 'Get', 'ss', (iface, name))
+    return v.value
+
+
+async def set_prop(bus, dest, path, iface, name, variant):
+    await call(bus, dest, path, 'org.freedesktop.DBus.Properties', 'Set', 'ssv', (iface, name, variant))
+
+
+async def name_owner(bus, name):
+    try:
+        (owner,) = await call(bus, 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                              'org.freedesktop.DBus', 'GetNameOwner', 's', (name,))
+        return owner
+    except DBusError:
+        return None
+
+
+class Iwd:
+    """The parts of iwd's D-Bus API this needs."""
+
+    def __init__(self, bus):
+        self.bus = bus
+
+    async def station(self):
+        objs = await managed_objects(self.bus, IWD)
+        for path, ifaces in sorted(objs.items()):
+            if 'net.connman.iwd.Station' in ifaces:
+                dev = ifaces.get('net.connman.iwd.Device', {})
+                name = dev.get('Name')
+                return path, (name.value if name else 'wlan0')
+        return None, None
+
+    async def scan(self, station):
+        try:
+            await call(self.bus, IWD, station, 'net.connman.iwd.Station', 'Scan')
+        except DBusError:
+            pass  # already scanning, or busy: use what is there
+        for _ in range(30):
+            if not await get_prop(self.bus, IWD, station, 'net.connman.iwd.Station', 'Scanning'):
+                break
+            await asyncio.sleep(0.5)
+        (ordered,) = await call(self.bus, IWD, station, 'net.connman.iwd.Station', 'GetOrderedNetworks')
+        networks = []
+        for path, signal in ordered:
+            (props,) = await call(self.bus, IWD, path, 'org.freedesktop.DBus.Properties',
+                                  'GetAll', 's', ('net.connman.iwd.Network',))
+            networks.append((path, props['Name'].value, props['Type'].value, signal / 100))
+        return networks
+
+    async def connect(self, station, ssid: str, hidden: bool):
+        networks = await self.scan(station)
+        for path, name, _, _ in networks:
+            if name == ssid:
+                await call(self.bus, IWD, path, 'net.connman.iwd.Network', 'Connect', timeout=60)
+                return
+        if hidden:
+            await call(self.bus, IWD, station, 'net.connman.iwd.Station',
+                       'ConnectHiddenNetwork', 's', (ssid,), timeout=60)
+            return
+        raise DBusError('net.connman.iwd.NotFound', 'network not in range')
+
+
+# -- GATT objects -------------------------------------------------------------
+
+class Characteristic(ServiceInterface):
+    def __init__(self, path, uuid, flags, service_path, value=b'', on_write=None):
+        super().__init__('org.bluez.GattCharacteristic1')
+        self.path = path
+        self._uuid = uuid
+        self._flags = flags
+        self._service = service_path
+        self._value = bytes(value)
+        self._on_write = on_write
+        self.notifying = False
+
+    @dbus_property(access=PropertyAccess.READ)
+    def UUID(self) -> 's':
+        return self._uuid
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Service(self) -> 'o':
+        return self._service
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Flags(self) -> 'as':
+        return self._flags
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Value(self) -> 'ay':
+        return self._value
+
+    @method()
+    def ReadValue(self, options: 'a{sv}') -> 'ay':
+        offset = options['offset'].value if 'offset' in options else 0
+        return self._value[offset:]
+
+    @method()
+    def WriteValue(self, value: 'ay', options: 'a{sv}'):
+        if not self._on_write:
+            raise DBusError('org.bluez.Error.NotPermitted', 'read-only')
+        offset = options['offset'].value if 'offset' in options else 0
+        self._on_write(bytes(value), offset)
+
+    @method()
+    def StartNotify(self):
+        self.notifying = True
+
+    @method()
+    def StopNotify(self):
+        self.notifying = False
+
+    def set(self, value: bytes):
+        self._value = bytes(value)
+        if self.notifying:
+            self.emit_properties_changed({'Value': self._value})
+
+
+class GattService(ServiceInterface):
+    def __init__(self, uuid):
+        super().__init__('org.bluez.GattService1')
+        self._uuid = uuid
+
+    @dbus_property(access=PropertyAccess.READ)
+    def UUID(self) -> 's':
+        return self._uuid
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Primary(self) -> 'b':
+        return True
+
+
+class ImprovAdvertisement(ServiceInterface):
+    """Service UUID + service data only: together with the flags that is
+    exactly the 31 bytes a legacy advertisement holds."""
+
+    def __init__(self, state, capabilities):
+        super().__init__('org.bluez.LEAdvertisement1')
+        self.state = state
+        self.capabilities = capabilities
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Type(self) -> 's':
+        return 'peripheral'
+
+    @dbus_property(access=PropertyAccess.READ)
+    def ServiceUUIDs(self) -> 'as':
+        return [SERVICE_UUID]
+
+    @dbus_property(access=PropertyAccess.READ)
+    def ServiceData(self) -> 'a{sv}':
+        return {SERVICE_DATA_UUID: Variant('ay', bytes([self.state, self.capabilities, 0, 0, 0, 0]))}
+
+    @method()
+    def Release(self):
+        pass
+
+
+class NameAdvertisement(ServiceInterface):
+    """A second advertisement carrying the device name, so the browser's
+    device picker shows "Epilykos" instead of an unnamed device."""
+
+    def __init__(self):
+        super().__init__('org.bluez.LEAdvertisement1')
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Type(self) -> 's':
+        return 'peripheral'
+
+    @dbus_property(access=PropertyAccess.READ)
+    def LocalName(self) -> 's':
+        return DEVICE_NAME
+
+    @method()
+    def Release(self):
+        pass
+
+
+# -- The Improv service --------------------------------------------------------
+
+class Improv:
+    def __init__(self, bus, iwd=None, setup_window=SETUP_WINDOW_S):
+        self.bus = bus
+        self.iwd = iwd or Iwd(bus)
+        self.started = time.monotonic()
+        self.setup_window = setup_window
+        self.tasks = set()
+        self.assembler = RpcAssembler()
+        self.capabilities = CAP_DEVICE_INFO | CAP_SCAN | (CAP_IDENTIFY if os.path.isdir(LED) else 0)
+        self.state = STATE_AUTHORIZED
+        self.adapter = None
+        self.advertising = False
+
+        svc = APP_PATH + '/service0'
+        self.service = GattService(SERVICE_UUID)
+        self.chars = {
+            'state': Characteristic(svc + '/char0', STATE_UUID, ['read', 'notify'], svc, [self.state]),
+            'error': Characteristic(svc + '/char1', ERROR_UUID, ['read', 'notify'], svc, [ERROR_NONE]),
+            'rpc': Characteristic(svc + '/char2', RPC_COMMAND_UUID, ['write'], svc, b'', self.on_rpc_write),
+            'result': Characteristic(svc + '/char3', RPC_RESULT_UUID, ['read', 'notify'], svc, b''),
+            'caps': Characteristic(svc + '/char4', CAPABILITIES_UUID, ['read'], svc, [self.capabilities]),
+        }
+        self.service_path = svc
+        self.adv = ImprovAdvertisement(self.state, self.capabilities)
+        self.name_adv = NameAdvertisement()
+
+    def export(self):
+        self.bus.export(self.service_path, self.service)
+        for c in self.chars.values():
+            self.bus.export(c.path, c)
+        self.bus.export(ADV_PATH, self.adv)
+        self.bus.export(NAME_ADV_PATH, self.name_adv)
+
+    def spawn(self, coro):
+        task = asyncio.get_running_loop().create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
+    # state / error / result
+    def set_state(self, state):
+        if state != self.state:
+            self.state = state
+            self.chars['state'].set([state])
+            self.adv.state = state
+            if self.advertising:
+                self.spawn(self.readvertise())
+
+    def set_error(self, error):
+        self.chars['error'].set([error])
+
+    def send_result(self, command, strings):
+        self.chars['result'].set(encode_result(command, strings))
+
+    # RPC
+    def on_rpc_write(self, data: bytes, offset: int):
+        packet = self.assembler.feed(data, offset)
+        if packet is None:
+            return
+        try:
+            command, payload = decode_rpc(packet)
+        except RpcError as e:
+            self.set_error(e.code)
+            return
+        self.set_error(ERROR_NONE)
+        if command == CMD_WIFI_SETTINGS:
+            try:
+                ssid, password = decode_wifi_settings(payload)
+            except RpcError as e:
+                self.set_error(e.code)
+                return
+            if self.state == STATE_PROVISIONING:
+                return
+            self.spawn(self.provision(ssid, password))
+        elif command == CMD_IDENTIFY:
+            if self.capabilities & CAP_IDENTIFY:
+                self.spawn(identify())
+        elif command == CMD_DEVICE_INFO:
+            self.send_result(CMD_DEVICE_INFO, ['EpilykosOS', os_version(), device_model(),
+                                               socket.gethostname()])
+        elif command == CMD_SCAN:
+            self.spawn(self.scan_networks())
+        else:
+            self.set_error(ERROR_UNKNOWN_RPC)
+
+    async def scan_networks(self):
+        auth = {'psk': 'WPA2', 'open': 'NO', '8021x': 'WPA2 EAP', 'wep': 'WEP'}
+        strings = []
+        try:
+            station, _ = await self.iwd.station()
+            if station:
+                seen = set()
+                for _, name, kind, rssi in await self.iwd.scan(station):
+                    if not name or name in seen:
+                        continue
+                    entry = [name, str(int(rssi)), auth.get(kind, 'WPA2')]
+                    if sum(len(s.encode()) + 1 for s in strings + entry) > 255:
+                        break
+                    seen.add(name)
+                    strings += entry
+        except (DBusError, asyncio.TimeoutError) as e:
+            log(f'scan failed: {e}')
+        self.send_result(CMD_SCAN, strings)
+
+    async def provision(self, ssid: bytes, password: str):
+        net = wifi.WifiNetwork(ssid=ssid, passphrase=password)
+        try:
+            net.validate()
+        except wifi.WifiError as e:
+            log(f'rejected Wi-Fi settings: {e}')
+            self.set_error(ERROR_UNABLE_TO_CONNECT)
+            return
+        self.set_state(STATE_PROVISIONING)
+        log(f'joining Wi-Fi network "{net.display_ssid}"')
+        wifi.write_iwd_network(net)
+        ip = None
+        try:
+            station, ifname = await self.iwd.station()
+            if not station:
+                raise DBusError('net.connman.iwd.NotFound', 'no Wi-Fi interface')
+            await self.iwd.connect(station, net.display_ssid, net.hidden)
+            for _ in range(60):
+                ip = ipv4_address(ifname)
+                if ip:
+                    break
+                await asyncio.sleep(0.5)
+        except (DBusError, asyncio.TimeoutError) as e:
+            log(f'could not join "{net.display_ssid}": {getattr(e, "type", "")} {e}')
+        if not ip:
+            wifi.remove_iwd_network(ssid)
+            self.set_error(ERROR_UNABLE_TO_CONNECT)
+            self.set_state(STATE_AUTHORIZED)
+            return
+        log(f'joined "{net.display_ssid}" as {ip}')
+        self.send_result(CMD_WIFI_SETTINGS, [f'http://{ip}:{APP_PORT}/'])
+        self.set_state(STATE_PROVISIONED)
+
+    # BlueZ registration
+    async def find_adapter(self):
+        objs = await managed_objects(self.bus, BLUEZ)
+        for path, ifaces in sorted(objs.items()):
+            if 'org.bluez.GattManager1' in ifaces and 'org.bluez.LEAdvertisingManager1' in ifaces:
+                return path
+        return None
+
+    async def register(self, adapter):
+        self.adapter = adapter
+        await set_prop(self.bus, BLUEZ, adapter, 'org.bluez.Adapter1', 'Powered', Variant('b', True))
+        await set_prop(self.bus, BLUEZ, adapter, 'org.bluez.Adapter1', 'Alias', Variant('s', DEVICE_NAME))
+        await call(self.bus, BLUEZ, adapter, 'org.bluez.GattManager1', 'RegisterApplication',
+                   'oa{sv}', (APP_PATH, {}))
+        log(f'Improv service registered on {adapter}')
+
+    async def advertise(self, on: bool):
+        if on == self.advertising:
+            return
+        mgr = 'org.bluez.LEAdvertisingManager1'
+        if on:
+            await call(self.bus, BLUEZ, self.adapter, mgr, 'RegisterAdvertisement', 'oa{sv}', (ADV_PATH, {}))
+            try:
+                await call(self.bus, BLUEZ, self.adapter, mgr, 'RegisterAdvertisement', 'oa{sv}',
+                           (NAME_ADV_PATH, {}))
+            except DBusError as e:
+                log(f'name advertisement not available: {e}')
+            log('advertising Wi-Fi setup over Bluetooth')
+        else:
+            for path in (NAME_ADV_PATH, ADV_PATH):
+                try:
+                    await call(self.bus, BLUEZ, self.adapter, mgr, 'UnregisterAdvertisement', 'o', (path,))
+                except DBusError:
+                    pass
+            log('stopped advertising Wi-Fi setup')
+        self.advertising = on
+
+    async def readvertise(self):
+        # BlueZ reads advertisement data once, at registration.
+        await self.advertise(False)
+        await self.advertise(True)
+
+    def should_advertise(self):
+        if self.state == STATE_PROVISIONING:
+            return self.advertising
+        if not online_address():
+            return True
+        in_window = time.monotonic() - self.started < self.setup_window
+        return in_window and not wifi.configured_networks()
+
+
+async def main():
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    improv = Improv(bus)
+    improv.export()
+
+    adapter = None
+    while adapter is None:
+        try:
+            adapter = await improv.find_adapter()
+        except DBusError:
+            pass
+        if adapter is None:
+            await asyncio.sleep(5)
+    owner = await name_owner(bus, BLUEZ)
+    await improv.register(adapter)
+
+    while True:
+        if await name_owner(bus, BLUEZ) != owner:
+            log('bluetoothd restarted; exiting so systemd starts a fresh registration')
+            return 1
+        want = improv.should_advertise()
+        if want and improv.state == STATE_PROVISIONED and not online_address():
+            improv.set_state(STATE_AUTHORIZED)
+        try:
+            await improv.advertise(want)
+        except DBusError as e:
+            log(f'advertising: {e}')
+        await asyncio.sleep(10)
+
+
+if __name__ == '__main__':
+    sys.exit(asyncio.run(main()))

@@ -1,0 +1,21 @@
+# Wi-Fi for EpilykosOS
+#
+# To have the box join your Wi-Fi on its first boot:
+#   1. Make a copy of this file in this same folder, named wifi.txt
+#   2. Fill in your network below and save it
+#   3. Put the card back in the Raspberry Pi and power it on
+#
+# EpilykosOS reads wifi.txt once, saves the network, and deletes the file
+# so your password does not stay on the card. You can also set up Wi-Fi
+# from a phone over Bluetooth instead (see the EpilykosOS README).
+#
+# ssid      the Wi-Fi network name, exactly as your phone shows it
+# password  its password (leave empty for an open network)
+# country   two-letter code of the country the box is in, e.g. GB, US,
+#           NG, DE; it selects the Wi-Fi channels allowed there
+# hidden    yes if the network does not broadcast its name
+
+ssid=
+password=
+country=
+hidden=no

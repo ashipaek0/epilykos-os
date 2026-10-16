@@ -108,7 +108,9 @@ def write_manifest(root, ref, commit, by_service):
     version = by_service['epilykos']['version']
     manifest = {
         'schema': 1,
-        'release': version if channel == 'stable' else f'{version}-dev+{commit[:7]}',
+        # Dev builds already name themselves 1.0.3-dev+abc1234 (application
+        # version.js); older ones sent the bare version.
+        'release': version if channel == 'stable' or '-dev' in version else f'{version}-dev+{commit[:7]}',
         'channel': channel,
         'sequence': prev_seq + 1,
         'images': images,

@@ -44,6 +44,10 @@ grep -q '^@includedir /etc/sudoers.d' "${TARGET_DIR}/etc/sudoers" ||
 	echo '@includedir /etc/sudoers.d' >> "${TARGET_DIR}/etc/sudoers"
 chmod 0440 "${TARGET_DIR}/etc/sudoers.d/epilykos"
 
+# bluetooth.service asks for /etc/bluetooth as 0555 (ConfigurationDirectory);
+# the root is read-only, so systemd can't fix the mode at boot and warns.
+[ ! -d "${TARGET_DIR}/etc/bluetooth" ] || chmod 0555 "${TARGET_DIR}/etc/bluetooth"
+
 # -- Preloaded application image --
 test -f "${MANIFEST}" || { echo "post-build: no manifest ${MANIFEST}" >&2; exit 1; }
 

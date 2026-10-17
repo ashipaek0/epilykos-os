@@ -127,9 +127,17 @@ class FakeAdvertisingManager(ServiceInterface):
         super().__init__('org.bluez.LEAdvertisingManager1')
         self.bus, self.app_owner = bus, app_owner
         self.active, self.registrations = {}, 0
+        self.max_ads, self.refuse = 5, False  # refuse: slots stuck, as seen on a Pi 3B
+        self.unregister_delays = []  # seconds, consumed one per UnregisterAdvertisement
 
     @method()
     async def RegisterAdvertisement(self, adv: 'o', options: 'a{sv}'):
+        # bluetoothd: a path registered twice is refused, and so is any
+        # registration once every advertising slot is in use.
+        if adv in self.active:
+            raise DBusError('org.bluez.Error.AlreadyExists', 'Already Exists')
+        if self.refuse or len(self.active) >= self.max_ads:
+            raise DBusError('org.bluez.Error.Failed', 'Maximum advertisements reached')
         reply = await self.bus.call(Message(destination=self.app_owner(), path=adv,
                                             interface='org.freedesktop.DBus.Properties', member='GetAll',
                                             signature='s', body=['org.bluez.LEAdvertisement1']))
@@ -140,8 +148,12 @@ class FakeAdvertisingManager(ServiceInterface):
         self.registrations += 1
 
     @method()
-    def UnregisterAdvertisement(self, adv: 'o'):
-        self.active.pop(adv, None)
+    async def UnregisterAdvertisement(self, adv: 'o'):
+        if self.unregister_delays:
+            await asyncio.sleep(self.unregister_delays.pop(0))
+        if adv not in self.active:
+            raise DBusError('org.bluez.Error.DoesNotExist', 'Does Not Exist')
+        del self.active[adv]
 
 
 # -- fake iwd -----------------------------------------------------------------------
@@ -346,6 +358,60 @@ async def main():
     await write(bytes(bad))
     assert (await read('char1')) == bytes([improv.ERROR_INVALID_RPC])
     ok('unknown command and bad checksum report errors 0x02 and 0x01')
+
+    # A state change re-advertises while the main loop may be stopping the
+    # advertisement: whichever runs first, BlueZ must end up holding exactly
+    # what the service thinks it holds (Pi 3B, 2026-10-17: after a setup,
+    # "Change Wi-Fi" failed with "Maximum advertisements reached").
+    for stop_first in (False, True):
+        await service.advertise(True)
+        new_state = improv.STATE_PROVISIONED if service.state != improv.STATE_PROVISIONED else improv.STATE_AUTHORIZED
+        if stop_first:
+            # The stop's second call is slow, so the re-advertise runs in the
+            # middle of it, as on the Pi: the stop then removes the fresh
+            # Improv advertisement but not the fresh name advertisement.
+            advm.unregister_delays = [0, 0.3]
+            stop = service.spawn(service.advertise(False))
+            await asyncio.sleep(0.05)
+            service.set_state(new_state)
+        else:
+            service.set_state(new_state)
+            stop = service.spawn(service.advertise(False))
+        await asyncio.gather(stop, *list(service.tasks))
+        assert bool(advm.active) == service.advertising, (stop_first, advm.active, service.advertising)
+        await service.advertise(False)
+        assert advm.active == {}, advm.active
+    ok('a re-advertise racing a stop leaves nothing registered behind')
+
+    # BlueZ still holding our advertisements from earlier must not block them.
+    advm.active = {improv.ADV_PATH: {}, improv.NAME_ADV_PATH: {}}
+    await service.advertise(True)
+    assert service.advertising and set(advm.active) == {improv.ADV_PATH, improv.NAME_ADV_PATH}
+    await service.advertise(False)
+    ok('a stale registration of ours is cleared before advertising again')
+
+    # Slots stuck for good: restart bluetoothd once, not in a loop.
+    run = tempfile.mkdtemp(prefix='reset-')
+    calls = os.path.join(run, 'calls')
+    systemctl = os.path.join(run, 'systemctl')
+    with open(systemctl, 'w') as f:
+        f.write(f'#!/bin/sh\necho "$*" >> {calls}\n')
+    os.chmod(systemctl, 0o755)
+    improv.SYSTEMCTL, improv.BLUEZ_RESET_FILE = systemctl, os.path.join(run, 'reset')
+    advm.refuse = True
+    for _ in range(improv.ADV_FAILURES_BEFORE_RESET - 1):
+        await service.update_advertising(True)
+    assert not os.path.exists(calls), 'must not reset before repeated failures'
+    await service.update_advertising(True)
+    for _ in range(5):
+        await service.update_advertising(True)
+    with open(calls) as f:
+        assert f.read().splitlines() == ['--no-block restart bluetooth.service']
+    advm.refuse = False
+    await service.update_advertising(True)
+    assert service.advertising and service.adv_failures == 0
+    await service.advertise(False)
+    ok('BlueZ refusing every time: bluetoothd restarted once, at most every 10 minutes')
 
 
 async def _eq(coro, value):

@@ -27,6 +27,7 @@ import fcntl
 import os
 import socket
 import struct
+import subprocess
 import sys
 import time
 
@@ -74,6 +75,14 @@ SETUP_WINDOW_S = int(os.environ.get('EPILYKOS_IMPROV_SETUP_WINDOW', '1800'))
 OFFLINE_GRACE_S = int(os.environ.get('EPILYKOS_IMPROV_OFFLINE_GRACE', '120'))
 DASHBOARD_WINDOW_FILE = os.environ.get('EPILYKOS_WIFI_SETUP_FILE', '/run/epilykos/wifi-setup-until')
 LED = '/sys/class/leds/ACT'
+# BlueZ refusing to advertise this many times in a row (10 s apart) means
+# its advertising slots are stuck; restarting bluetoothd frees them.
+ADV_FAILURES_BEFORE_RESET = 3
+# This service restarts with bluetoothd, so the last reset is remembered in
+# /run: at most one per 10 minutes, never a restart loop.
+BLUEZ_RESET_FILE = os.environ.get('EPILYKOS_IMPROV_RESET_FILE', '/run/epilykos/improv-bluetooth-reset')
+BLUEZ_RESET_INTERVAL_S = 600
+SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
 
 BLUEZ = 'org.bluez'
 IWD = 'net.connman.iwd'
@@ -450,6 +459,11 @@ class Improv:
         self.offline_since = None
         self.adapter = None
         self.advertising = False
+        # One advertising change at a time: a re-advertise after a state
+        # change could otherwise interleave with the main loop's stop and
+        # leave BlueZ holding advertisements this process thinks it dropped.
+        self.adv_lock = asyncio.Lock()
+        self.adv_failures = 0
 
         svc = APP_PATH + '/service0'
         self.service = GattService(SERVICE_UUID)
@@ -593,11 +607,28 @@ class Improv:
         log(f'Improv service registered on {adapter}')
 
     async def advertise(self, on: bool):
+        async with self.adv_lock:
+            await self._advertise(on)
+
+    async def _unregister_all(self):
+        mgr = 'org.bluez.LEAdvertisingManager1'
+        for path in (NAME_ADV_PATH, ADV_PATH):
+            try:
+                await call(self.bus, BLUEZ, self.adapter, mgr, 'UnregisterAdvertisement', 'o', (path,))
+            except DBusError:
+                pass  # not registered
+
+    async def _advertise(self, on: bool):
         if on == self.advertising:
             return
         mgr = 'org.bluez.LEAdvertisingManager1'
+        # Either way, start from nothing registered: a stale registration of
+        # ours would otherwise hold a slot BlueZ never gives back.
+        await self._unregister_all()
+        self.advertising = False
         if on:
             await call(self.bus, BLUEZ, self.adapter, mgr, 'RegisterAdvertisement', 'oa{sv}', (ADV_PATH, {}))
+            self.advertising = True
             try:
                 await call(self.bus, BLUEZ, self.adapter, mgr, 'RegisterAdvertisement', 'oa{sv}',
                            (NAME_ADV_PATH, {}))
@@ -605,18 +636,41 @@ class Improv:
                 log(f'name advertisement not available: {e}')
             log('advertising Wi-Fi setup over Bluetooth')
         else:
-            for path in (NAME_ADV_PATH, ADV_PATH):
-                try:
-                    await call(self.bus, BLUEZ, self.adapter, mgr, 'UnregisterAdvertisement', 'o', (path,))
-                except DBusError:
-                    pass
             log('stopped advertising Wi-Fi setup')
-        self.advertising = on
 
     async def readvertise(self):
         # BlueZ reads advertisement data once, at registration.
-        await self.advertise(False)
-        await self.advertise(True)
+        async with self.adv_lock:
+            if self.advertising:
+                await self._advertise(False)
+                await self._advertise(True)
+
+    async def update_advertising(self, want: bool):
+        """The main loop's step: advertise or not, and recover when BlueZ
+        keeps refusing (its slots stuck, as seen on a Pi 3B after a setup)."""
+        try:
+            await self.advertise(want)
+            self.adv_failures = 0
+            return
+        except DBusError as e:
+            self.adv_failures += 1
+            log(f'advertising: {e}')
+        if self.adv_failures < ADV_FAILURES_BEFORE_RESET:
+            return
+        try:
+            if time.time() - os.path.getmtime(BLUEZ_RESET_FILE) < BLUEZ_RESET_INTERVAL_S:
+                return
+        except OSError:
+            pass  # never reset yet
+        try:
+            os.makedirs(os.path.dirname(BLUEZ_RESET_FILE), exist_ok=True)
+            with open(BLUEZ_RESET_FILE, 'w') as f:
+                f.write(f'{int(time.time())}\n')
+        except OSError as e:
+            log(f'cannot record the bluetoothd reset ({e}); not resetting')
+            return
+        log('Bluetooth keeps refusing to advertise; restarting bluetoothd to free its advertising slots')
+        subprocess.run([SYSTEMCTL, '--no-block', 'restart', 'bluetooth.service'], check=False)
 
     def should_advertise(self):
         if self.state == STATE_PROVISIONING:
@@ -663,10 +717,7 @@ async def main():
         want = improv.should_advertise()
         if want and improv.state == STATE_PROVISIONED and (not online_address() or dashboard_window_open()):
             improv.set_state(STATE_AUTHORIZED)
-        try:
-            await improv.advertise(want)
-        except DBusError as e:
-            log(f'advertising: {e}')
+        await improv.update_advertising(want)
         await asyncio.sleep(10)
 
 

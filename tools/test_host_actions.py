@@ -2,11 +2,14 @@
 """Self-tests for the dashboard's system actions on the host (C-HOST-001)
 and the SSH maintenance login (C-ACCESS-001): epilykos_ssh, epilykos-hostd
 over its real Unix socket (with a fake systemctl), SSH settings imported
-from BOOT by epilykos-wifi-import, and the dashboard port (epilykos_port,
-and the same rules in epilykos-run). Passwords never reach a log.
+from BOOT by epilykos-wifi-import, the dashboard port (epilykos_port, and
+the same rules in epilykos-run), and the dashboard password reset
+(dashboard-password.txt on BOOT, epilykos-reset-password). Passwords never
+reach a log.
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -19,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OVERLAY = ROOT / 'os/board/epilykos/raspberrypi3/rootfs-overlay'
 PYLIB = OVERLAY / 'usr/lib/epilykos/python'
 sys.path.insert(0, str(PYLIB))
+import epilykos_dashboard as dashboard  # noqa: E402
 import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 
@@ -308,5 +312,77 @@ for name, files, expect_keys, expect_pw in [
         assert os.listdir(boot) == [], (name, os.listdir(boot))
         assert h not in out and SECRET not in out
 ok('BOOT import: Imager key-only and password modes and authorized_keys turn SSH on; files removed; nothing logged')
+
+# -- dashboard password reset -----------------------------------------------------------
+NEW_PW = 'new dashboard pass'
+NODE_VERIFY = ('const c=require("crypto"),[s,h]=require("fs").readFileSync(process.argv[1],"utf8").split(":");'
+               'process.exit(c.timingSafeEqual(c.scryptSync(process.argv[2],s,64),Buffer.from(h,"hex"))?0:1)')
+
+
+def app_accepts(path, password):
+    """What the app's sessionAuth.verifyPassword computes, run by Node when it is here."""
+    if not dashboard.verify(password, path):
+        return False
+    if shutil.which('node'):
+        return subprocess.run(['node', '-e', NODE_VERIFY, path, password]).returncode == 0
+    return True
+
+
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, 'settings-password')
+    dashboard.set_password(NEW_PW, f)
+    assert oct(os.stat(f).st_mode & 0o777) == '0o600'
+    assert app_accepts(f, NEW_PW) and not app_accepts(f, NEW_PW + 'x')
+    for bad in ('abc', 'x' * 129, 'tab\there', None):
+        expect(dashboard.PasswordError, dashboard.set_password, bad, f)
+    assert dashboard.parse_boot_file('\ufeff\n  ' + NEW_PW + '  \r\nignored\n') == NEW_PW
+    expect(dashboard.PasswordError, dashboard.parse_boot_file, '\n \n')
+ok('dashboard password: stored as the app stores it (Node verifies it), 4-128 characters, first line of the file')
+
+for label, data, replaced in [
+        ('UTF-8', (NEW_PW + '\n').encode(), True),
+        ('UTF-16 (Windows Notepad)', ('\ufeff' + NEW_PW + '\r\n').encode('utf-16-le'), True),
+        ('blank (card pulled too soon)', b'', False),
+        ('too short', b'abc\n', False)]:
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        boot = d / 'boot'
+        boot.mkdir()
+        (boot / 'dashboard-password.txt').write_bytes(data)
+        pwfile = d / 'app-data/settings-password'
+        env = dict(os.environ, EPILYKOS_BOOT_DIR=str(boot), EPILYKOS_IWD_DIR=str(d / 'iwd'), EPILYKOS_RUN_DIR=str(d),
+                   EPILYKOS_SSH_DIR=str(d / 'ssh'), EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'country'),
+                   EPILYKOS_DASHBOARD_PASSWORD_FILE=str(pwfile), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+        r = subprocess.run([sys.executable, str(OVERLAY / 'usr/bin/epilykos-wifi-import')], env=env,
+                           capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        assert r.returncode == 0 and NEW_PW not in out, out
+        if replaced:
+            assert app_accepts(str(pwfile), NEW_PW) and os.listdir(boot) == [], (label, out)
+            assert 'dashboard password replaced' in out
+        else:
+            assert not pwfile.exists() and os.listdir(boot) == ['dashboard-password.txt'], (label, out)
+            assert 'left in place' in out, out
+ok('dashboard-password.txt on BOOT: replaces the password (UTF-8 or UTF-16) and is deleted; blank or short left in place')
+
+with tempfile.TemporaryDirectory() as d:
+    d = Path(d)
+    calls = d / 'systemctl.log'
+    fake = d / 'systemctl'
+    fake.write_text(f'#!/bin/sh\necho "$@" >> {calls}\n')
+    fake.chmod(0o755)
+    pwfile = d / 'settings-password'
+    env = dict(os.environ, EPILYKOS_DASHBOARD_PASSWORD_FILE=str(pwfile), EPILYKOS_SYSTEMCTL=str(fake),
+               PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+    cmd = [sys.executable, str(OVERLAY / 'usr/bin/epilykos-reset-password')]
+    r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\nsomething else\n', capture_output=True, text=True)
+    assert r.returncode == 1 and "don't match" in r.stderr and not pwfile.exists() and not calls.exists()
+    r = subprocess.run(cmd, env=env, input='abc\nabc\n', capture_output=True, text=True)
+    assert r.returncode == 1 and '4 to 128' in r.stderr and not pwfile.exists()
+    r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\n{NEW_PW}\n', capture_output=True, text=True)
+    assert r.returncode == 0 and app_accepts(str(pwfile), NEW_PW), r.stderr
+    assert calls.read_text().splitlines() == ['--no-block restart epilykos.service']
+    assert NEW_PW not in r.stdout + r.stderr
+ok('epilykos-reset-password: asks twice, refuses a mismatch or a short one, saves it and restarts Epilykos')
 
 print('\nPASS host action self-tests')

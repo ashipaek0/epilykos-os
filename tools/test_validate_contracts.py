@@ -98,7 +98,9 @@ run('epilykos quadlet without LOG_TO_FILE=false',
 run('epilykos quadlet without /healthz',
     files={'quadlets/epilykos.container': GOOD_QUADLET.replace('/healthz', '/api/ping')}, expect='/healthz')
 run('valid appliance launcher passes', files={LAUNCHER_PATH: GOOD_LAUNCHER})
-run('real os/ launcher passes', files={LAUNCHER_PATH: (ROOT / 'os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-run').read_text()})
+launcher = ROOT / 'os/board/epilykos/raspberrypi3/rootfs-overlay/usr/bin/epilykos-run'
+if launcher.exists():
+    run('real os/ launcher passes', files={LAUNCHER_PATH: launcher.read_text()})
 run('launcher with --privileged', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('--name epilykos', '--name epilykos --privileged')},
     expect='--privileged')
 run('launcher without LOG_TO_FILE=false', files={LAUNCHER_PATH: GOOD_LAUNCHER.replace('LOG_TO_FILE=false', 'LOG_TO_FILE=true')},

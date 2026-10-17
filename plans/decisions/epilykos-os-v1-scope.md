@@ -47,10 +47,12 @@ Approved in the decision review on 2026-10-17. These are requirements and scope 
 4. Implement the host/application changes with reliable automated failure tests and release publication gates.
 5. Complete the initial hardware acceptance suite and enable normal automatic stable publication under R15.
 
-## Current baseline and known failure
+## Decision-review baseline and original failure
 
 Decision-review source baseline: epilykos-os dev `4baf9fd42f83469c100e3d4dccd9a925e0c3eaff`; main `2b212af1d358ac8d64a7568cb8dfb93e8eef5a87` when inspected on 2026-10-17. The full OS build workflow is on dev and must reach main to complete the stable OS automation.
 
 Build run https://github.com/ashipaek0/epilykos-os/actions/runs/39031562530 failed during Buildroot rootfs creation/cleanup with permission-denied removal of staged Bluetooth configuration files. Its QEMU job did not reach boot testing because there was no image artifact. This is an actual build failure, distinct from the earlier QEMU limitations reported by the user.
 
 The decision review and this planning commit changed planning documents only. It did not implement source fixes, change GitHub secrets/protections, publish releases or perform hardware tests.
+
+Execution update: B01 repair PR #45 (`20e3eee`) passed full Pi image build/structure in run 39036230265 and provides the test image artifact. This repairs the original build failure; the remaining feature and physical evidence work is still pending.

@@ -1,6 +1,6 @@
 # EpilykosOS v1 implementation plan
 
-Status: proposed execution sequence for the approved v1 scope; implementation has not started under this plan.
+Status: execution authorized by the maintainer with “proceed”; focused implementation PRs are in progress.
 
 Date: 2026-10-17. Integration target: `dev` in `ashipaek0/epilykos-os` and, where needed, `ashipaek0/Epilykos`. Stable source remains `main`. Changes use focused PRs authored as `ashipaek0`; the existing maintainer merge decision authorizes release. This plan does not authorize merging or publishing on the user's behalf.
 
@@ -250,7 +250,7 @@ Dependencies: Pi 3B core path complete; do not block Pi 3B release. Files per bo
 
 | Checkpoint | Work | Status | Exit evidence |
 |---|---|---|---|
-| Baseline | B01–B03 | Pending | Viable image, aligned contracts, truthful required/diagnostic checks |
+| Baseline | B01–B03 | B01 delivered in PR #45 (20e3eee); full image run 39036230265 passed. B02/B03 in progress. | Viable image, aligned contracts, truthful required/diagnostic checks |
 | Foundation | D01–D02 | Pending; physical evidence unavailable here | Protected boot/recovery design and auth/trust ADRs with measured feasibility |
 | Data safety | S01–S05 | Pending | Production-size transfer/restore/snapshots with bounded resources and interruption recovery |
 | Boot recovery | K01–K06 | Pending | Complete per-slot Linux, bounded fallback, bad-loader recovery and independent recovery |

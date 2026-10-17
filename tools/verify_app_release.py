@@ -23,9 +23,9 @@ def verify(payload, fetch=api):
     if commit != head:
         raise PayloadError('stale release: source branch has advanced')
     filename = 'docker-build.yml' if ref == 'main' else 'docker-build-dev.yml'
-    runs = json.loads(fetch(f'actions/workflows/{filename}/runs?head_sha={commit}&event=push&per_page=20'))['workflow_runs']
+    runs = json.loads(fetch(f'actions/workflows/{filename}/runs?head_sha={commit}&per_page=20'))['workflow_runs']
     for run in runs:
-        if run.get('head_sha') != commit or run.get('head_branch') != ref or run.get('event') != 'push':
+        if run.get('head_sha') != commit or run.get('head_branch') != ref or run.get('event') not in ('push', 'schedule', 'workflow_dispatch'):
             continue
         jobs = json.loads(fetch(f'actions/runs/{run["id"]}/jobs?per_page=100'))['jobs']
         builds = [j for j in jobs if j['name'].startswith('build-and-push')]

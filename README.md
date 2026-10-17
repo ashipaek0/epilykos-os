@@ -32,7 +32,7 @@ EpilykosOS turns a Raspberry Pi into an [Epilykos](https://github.com/ashipaek0/
 - Application updates are separate from OS updates and can be rolled back on their own.
 - Every application image is pinned by digest.
 
-Planned: automatic, signed updates with rollback for both the system and the app.
+Signed app updates support health checks, rollback and optional automatic installation. Signed OS bundle installation remains planned. Appliance maintenance and pairing details are in [the feature guide](evidence/stage-1/maintenance-and-pairing.md).
 
 ## For developers
 

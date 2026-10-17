@@ -39,6 +39,9 @@ if [ -n "${p}" ] && { [ "${p}" -eq 80 ] || { [ "${p}" -ge 1024 ] && [ "${p}" -le
 	PORT=${p}
 fi
 
+# TZ is validated by the host before reaching Podman. Never source a DATA file.
+TZ=$(python3 -c 'import sys; sys.path.insert(0,"/usr/lib/epilykos/python"); import epilykos_system as s; print(s.timezone())')
+
 DIALOUT_GID=$(awk -F: '$1 == "dialout" { print $3 }' /etc/group)
 
 set -- \
@@ -58,6 +61,9 @@ set -- \
 	--volume /run/epilykos-host:/run/epilykos-host \
 	--env EPILYKOS_HOST_SOCKET=/run/epilykos-host/host.sock \
 	--volume /etc/localtime:/etc/localtime:ro \
+	--volume /run/epilykos:/run/epilykos:ro \
+	--env EPILYKOS_CLOCK_FILE=/run/epilykos/clock.json \
+	--env TZ="${TZ}" \
 	--env TMPDIR=/tmp \
 	--env PORT="${PORT}" \
 	--env LOG_TO_FILE=false \

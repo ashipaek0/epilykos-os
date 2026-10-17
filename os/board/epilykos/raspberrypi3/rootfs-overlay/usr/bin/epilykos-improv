@@ -604,7 +604,7 @@ class Improv:
         await set_prop(self.bus, BLUEZ, adapter, 'org.bluez.Adapter1', 'Alias', Variant('s', DEVICE_NAME))
         # Setup needs no pairing, and nothing else should bond with the box
         # (no PIN, no agent: it would be "Just Works" for anyone nearby).
-        await set_prop(self.bus, BLUEZ, adapter, 'org.bluez.Adapter1', 'Pairable', Variant('b', False))
+        # hostd owns Pairable, with a five-minute timeout and a device-selected agent.
         await call(self.bus, BLUEZ, adapter, 'org.bluez.GattManager1', 'RegisterApplication',
                    'oa{sv}', (APP_PATH, {}))
         log(f'Improv service registered on {adapter}')

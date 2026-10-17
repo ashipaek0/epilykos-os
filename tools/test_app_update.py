@@ -153,8 +153,14 @@ ok('apply: pulls by digest, starts it, promotes once healthy (floor 8)')
 publish(9, DIG2, '2.9.0-dev+dddd')
 restart_rc.write_text('1\n0\n')
 calls.write_text('')
-assert up.apply()['state'] == 'applying'
+assert up.check()['app']['auto_install_supported']
+try:
+    up.apply(automatic=True, sequence=999, digest=DIG2)
+except up.UpdateError: pass
+else: raise AssertionError('changed verified release accepted')
+assert up.apply(automatic=True, sequence=9, digest=DIG2)['state'] == 'applying'
 wait_idle()
+assert up.apply(automatic=True, sequence=9, digest=DIG2)['state'] == 'already-attempted'
 log = calls.read_text().splitlines()
 assert log[-2:] == [f'systemctl restart epilykos.service active={ID_FOR[DIG2]}',
                     f'systemctl restart epilykos.service active={ID_FOR[DIG1]}'], log
@@ -204,7 +210,7 @@ ok('sign_app_manifest: the merged manifest, signed by CI, verifies on the applia
 
 # -- epilykos-run picks the image ----------------------------------------------------
 run = (OVERLAY / 'usr/bin/epilykos-run').read_text()
-run = run.replace('/usr/lib/epilykos/image.env', str(T / 'image.env')).replace('/data/epilykos/updater/active.env', str(state / 'active.env'))
+run = run.replace('/usr/lib/epilykos/image.env', str(T / 'image.env')).replace('/data/epilykos/updater/active.env', str(state / 'active.env')).replace('/usr/lib/epilykos/python', str(PYLIB))
 (T / 'run.sh').write_text(run)
 bin_dir = T / 'bin'
 bin_dir.mkdir()

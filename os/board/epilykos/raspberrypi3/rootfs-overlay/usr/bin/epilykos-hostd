@@ -36,6 +36,8 @@ import time
 sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
+import epilykos_bluetooth as bluetooth
+import epilykos_system as system
 import epilykos_update as update  # noqa: E402
 
 SOCKET = os.environ.get('EPILYKOS_HOST_SOCKET', '/run/epilykos-host/host.sock')
@@ -87,9 +89,20 @@ def sshd_restart():
 
 def handle(req):
     action = req.get('action')
+    if action in ('bluetooth_status', 'bluetooth_open', 'bluetooth_close', 'bluetooth_pair', 'bluetooth_reply', 'bluetooth_remove'):
+        return bluetooth.action(action, req)
     if action == 'status':
         return {'ok': True, 'appliance': True, 'os_version': os_version(),
-                'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status(), 'port': port.read()}
+                'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status(), 'port': port.read(),
+                'clock': system.clock(), 'storage': system.storage()}
+    if action == 'set_timezone':
+        zone = system.set_timezone(req.get('timezone'))
+        system.write_clock()
+        if req.get('restart', True):
+            later(lambda: systemctl('restart', 'epilykos.service'), delay=3)
+        return {'ok': True, 'timezone': zone, 'restart_required': True}
+    if action == 'set_clock':
+        return {'ok': True, 'clock': system.set_clock(req.get('epoch'))}
     if action == 'restart':
         log('restart requested from Epilykos settings')
         later(lambda: systemctl('reboot'))
@@ -150,7 +163,7 @@ def handle(req):
     if action == 'update_apply':
         target = str(req.get('target', 'app'))
         log(f'{target} update requested from Epilykos settings')
-        return update.apply(target)
+        return update.apply(target, automatic=req.get('automatic') is True, sequence=req.get('sequence'), digest=req.get('digest'))
     return {'ok': False, 'error': 'unknown action'}
 
 
@@ -167,7 +180,7 @@ class Handler(socketserver.StreamRequestHandler):
                 if not isinstance(req, dict):
                     raise ValueError('not an object')
                 reply = handle(req)
-            except (ssh.SshError, port.PortError, update.UpdateError) as e:
+            except (ssh.SshError, port.PortError, update.UpdateError, system.SystemError, bluetooth.PairingError) as e:
                 reply = {'ok': False, 'error': str(e)}
             except (ValueError, UnicodeError):
                 reply = {'ok': False, 'error': 'malformed request'}
@@ -210,6 +223,14 @@ def main():
         update.recover()
     except OSError as e:
         log(f'update recovery: {e}')
+    def clock_loop():
+        while True:
+            try: system.write_clock()
+            except OSError as e: log(f'clock state: {e}')
+            time.sleep(15)
+    system.write_clock()
+    bluetooth.start()
+    threading.Thread(target=clock_loop, daemon=True).start()
     log(f'listening on {SOCKET}')
     notify_ready()
     server.serve_forever()

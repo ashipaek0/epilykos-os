@@ -92,7 +92,7 @@ class FakeAdapter(ServiceInterface):
         super().__init__('org.bluez.Adapter1')
         self.powered = False
         self.alias = 'BlueZ'
-        self.pairable = True
+        self.pairable = False
 
     @dbus_property()
     def Powered(self) -> 'b':

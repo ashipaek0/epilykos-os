@@ -413,7 +413,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 - Application repo: build workflows record the pushed multi-arch digest, commit and ref as an artifact and step summary (app commit fabfa89).
 - OS repo: make contracts enforces provenance for every manifest in manifests/ against release/digest-records/.
-- Bridge: after each image build the application repository sends an app-image-published repository_dispatch carrying the digest records; .github/workflows/app-release-sync.yml applies them with tools/sync_app_release.py (strict payload validation), runs make contracts, and opens or updates one pull request per channel (app-sync/dev, app-sync/stable) against dev. Merging that pull request is the human trust decision; nothing is merged automatically.
+- Bridge: after each image build the application repository sends an app-image-published repository_dispatch carrying the digest records; .github/workflows/app-release-sync.yml applies them with tools/sync_app_release.py (strict payload validation), authenticates the source branch and successful build artifact, runs make contracts, then merges a manifest-only PR into dev or main respectively. The maintainer's source merge is the release decision (D-RELEASE-001); signing and stable image build are explicitly dispatched after the token-authored merge.
 
 **Required evidence**
 
@@ -679,7 +679,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 **Implementation status**
 
 - Application follows TZ, else /etc/localtime; /healthz reports time and time zone.
-- Gap: the application has no input for host clock-sync state yet; the host interface is defined by D-TIME-001.
+- Host writes /run/epilykos/clock.json every 15 seconds, mounted read-only into the container; the dashboard warns when unsynchronized or stale. Site time zone persists on DATA and is passed as TZ.
 
 **Required evidence**
 

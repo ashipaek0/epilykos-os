@@ -90,6 +90,9 @@ def _write(name, text):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, _path(name))
+    fd = os.open(UPDATE_DIR, os.O_RDONLY | os.O_DIRECTORY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
 
 
 def _write_json(name, value):
@@ -224,6 +227,7 @@ def _app_view():
     cur = current()
     job = _read_json('job.json')
     return {
+        'auto_install_supported': True,
         'current_digest': cur.get('digest', ''),
         'current_version': cur.get('release', ''),
         'state': 'applying' if job else 'idle',
@@ -257,7 +261,7 @@ def check():
     return {'ok': True, 'app': app, 'os': os_view()}
 
 
-def apply(target='app'):
+def apply(target='app', automatic=False, sequence=None, digest=None):
     if target == 'os':
         raise UpdateError('EpilykosOS updates are not published yet')
     if target != 'app':
@@ -275,10 +279,18 @@ def apply(target='app'):
             candidate = None
         if candidate is None:
             candidate = fetch_latest()[0]
+        if automatic:
+            if candidate['sequence'] != sequence or candidate['digest'] != digest:
+                raise UpdateError('The verified release changed; check for updates again')
+            attempted = _read_json('auto-attempt.json') or {}
+            if attempted.get('sequence', 0) >= candidate['sequence']:
+                return {'ok': True, 'state': 'already-attempted'}
         if candidate['sequence'] <= floor() or candidate['digest'] == current().get('digest'):
             return {'ok': True, 'state': 'current'}
         job = {'state': 'downloading', 'started_at': _now(), 'release': candidate['release'],
                'sequence': candidate['sequence'], 'digest': candidate['digest']}
+        if automatic:
+            _write_json('auto-attempt.json', {'sequence': candidate['sequence'], 'digest': candidate['digest']})
         _write_json('job.json', job)
         _running.set()
     threading.Thread(target=_run, args=(candidate, job), daemon=True).start()

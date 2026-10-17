@@ -14,8 +14,13 @@ Checked once the inputs exist (directories are optional until then):
   - quadlets/*.container: no Privileged=true without an
     `# exception: <id>` marker; the Epilykos unit sets LOG_TO_FILE=false and
     SQLITE_SYNCHRONOUS, and its HealthCmd calls /healthz
+  - os/board/*/rootfs-overlay/usr/bin/epilykos-run (the image's container
+    launcher, standing in for a Quadlet until Podman ships the generator):
+    the same rules, plus /app/data mapped to DATA and the image started by
+    the build-time image ID rather than a tag
   - manifests/*.yaml: schema 1, channel stable|dev, integer sequence >= 1,
-    sha256 digests for epilykos and bms-bridge, no mutable tags; stable
+    sha256 digests for epilykos (and bms-bridge when a legacy manifest still
+    carries it), no mutable tags; stable
     manifests only reference digests with a `main` record in
     release/digest-records/*.json
 
@@ -120,6 +125,24 @@ def check_quadlets():
                 err(f'{unit.name}: Image must be a digest supplied by the active manifest, not a mutable tag')
 
 
+def check_appliance_launchers():
+    for script in sorted(ROOT.glob('os/board/*/rootfs-overlay/usr/bin/epilykos-run')):
+        text = script.read_text()
+        name = script.relative_to(ROOT)
+        if re.search(r'--privileged\b', text) and not re.search(r'#\s*exception:\s*\S+', text):
+            err(f'{name}: --privileged without an approved `# exception: <id>` marker (I-006)')
+        if not re.search(r'--env[ =]LOG_TO_FILE=false\b', text):
+            err(f'{name}: must set --env LOG_TO_FILE=false (C-RUNTIME-002)')
+        if not re.search(r'--env[ =]SQLITE_SYNCHRONOUS=(NORMAL|FULL|EXTRA)\b', text):
+            err(f'{name}: must set SQLITE_SYNCHRONOUS explicitly (C-DATA-003)')
+        if not re.search(r'--health-cmd[ =].*?/healthz', text):
+            err(f'{name}: --health-cmd must call /healthz (C-RUNTIME-002)')
+        if not re.search(r'--volume[ =]/data/epilykos/\S+:/app/data\b', text):
+            err(f'{name}: /app/data must be bind-mounted from /data/epilykos (C-DATA-001)')
+        if not re.search(r'podman run .*"\$\{EPILYKOS_IMAGE_ID\}"\s*$', text, re.M):
+            err(f'{name}: must start the preloaded image by "${{EPILYKOS_IMAGE_ID}}", not a tag (C-RUNTIME-002)')
+
+
 def load_digest_records():
     records = {}
     rdir = ROOT / 'release' / 'digest-records'
@@ -148,7 +171,11 @@ def check_manifests():
         if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
             err(f'{name}: sequence must be an integer >= 1 (C-UPDATE-002)')
         images = m.get('images') or {}
+        # bms-bridge is the legacy Bluetooth sidecar: optional, but pinned
+        # like any other image when present.
         for svc in ('epilykos', 'bms-bridge'):
+            if svc == 'bms-bridge' and svc not in images:
+                continue
             img = images.get(svc) or {}
             digest = str(img.get('digest', ''))
             if not DIGEST.match(digest):
@@ -165,6 +192,7 @@ def main():
         return 1
     check_registry(reg)
     check_quadlets()
+    check_appliance_launchers()
     check_manifests()
     if errors:
         for e in errors:

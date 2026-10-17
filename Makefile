@@ -15,3 +15,4 @@ render:
 test:
 	$(PYTHON) tools/test_validate_contracts.py
 	$(PYTHON) tools/test_sync_app_release.py
+	$(PYTHON) tools/test_verify_app_release.py

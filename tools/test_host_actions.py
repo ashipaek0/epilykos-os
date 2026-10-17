@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Self-tests for the dashboard's system actions on the host (C-HOST-001)
 and the SSH maintenance login (C-ACCESS-001): epilykos_ssh, epilykos-hostd
-over its real Unix socket (with a fake systemctl), and SSH settings
-imported from BOOT by epilykos-wifi-import. Passwords never reach a log.
+over its real Unix socket (with a fake systemctl), SSH settings imported
+from BOOT by epilykos-wifi-import, and the dashboard port (epilykos_port,
+and the same rules in epilykos-run). Passwords never reach a log.
 """
 import json
 import os
@@ -18,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OVERLAY = ROOT / 'os/board/epilykos/raspberrypi3/rootfs-overlay'
 PYLIB = OVERLAY / 'usr/lib/epilykos/python'
 sys.path.insert(0, str(PYLIB))
+import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 
 SECRET = 'correct horse battery'
@@ -136,6 +138,46 @@ expect(ssh.SshError, ssh.parse_authorized_keys, f'{KEY}\nnot a key\n')
 expect(ssh.SshError, ssh.parse_authorized_keys, '# nothing\n')
 ok('authorized_keys on BOOT: all keys or nothing')
 
+# -- dashboard port ------------------------------------------------------------------
+for good in (80, 1024, 3000, 8080, 65535, '8080', ' 8443 '):
+    assert port.validate(good) == int(str(good).strip()), good
+for bad in (0, 22, 443, 1023, 65536, 5353, 5355, -1, True, None, '80x', '', 80.0):
+    expect(port.PortError, port.validate, bad)
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, 'epilykos', 'port')
+    assert port.read(f) == 3000, 'unset: 3000'
+    assert port.write(8080, f) == 8080 and open(f).read() == '8080\n' and port.read(f) == 8080
+    for junk in ('22\n', 'abc\n', '', '5353\n'):
+        open(f, 'w').write(junk)
+        assert port.read(f) == 3000, junk
+assert port.dashboard_url('192.0.2.10', 80) == 'http://192.0.2.10/'
+assert port.dashboard_url('192.0.2.10', 8080) == 'http://192.0.2.10:8080/'
+with socket.socket() as busy:
+    busy.bind(('127.0.0.1', 0))
+    busy.listen()
+    taken = busy.getsockname()[1]
+    assert port.in_use(taken), 'a listening port is in use'
+assert not port.in_use(taken), 'a closed port is free'
+ok('port: 80 or 1024-65535 (not mDNS/LLMNR), 3000 when unset or unreadable, in-use check, dashboard URL')
+
+# epilykos-run must read the file with the same rules (it is sh, not Python).
+run_sh = (OVERLAY / 'usr/bin/epilykos-run').read_text()
+block = run_sh[run_sh.index('PORT=3000\n'):]
+block = block[:block.index('\nfi\n') + 4]
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, 'port')
+    for content, want in (('8080\n', '8080'), ('80\n', '80'), ('65535', '65535'), ('22\n', '3000'), ('0080\n', '3000'),
+                          ('5353\n', '3000'), ('99999\n', '3000'), ('8080; reboot\n', '3000'), ('', '3000'), (None, '3000')):
+        if content is None:
+            os.path.exists(f) and os.unlink(f)
+        else:
+            open(f, 'w').write(content)
+        got = subprocess.run(['sh', '-ec', block.replace('/data/epilykos/port', f) + 'echo "$PORT"'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        assert got == want, (content, got)
+assert '--env PORT="${PORT}"' in run_sh and "127.0.0.1:${PORT}/healthz" in run_sh
+ok('epilykos-run: same port rules, passes PORT to the app and its health check')
+
 # -- epilykos-hostd over its socket --------------------------------------------------
 with tempfile.TemporaryDirectory() as d:
     d = Path(d)
@@ -148,7 +190,7 @@ with tempfile.TemporaryDirectory() as d:
     fake.chmod(0o755)
     env = dict(os.environ, EPILYKOS_HOST_SOCKET=str(sock), EPILYKOS_RUN_DIR=str(run), EPILYKOS_SSH_DIR=str(sshdir),
                EPILYKOS_SYSTEMCTL=str(fake), EPILYKOS_APP_GID=str(os.getgid()),
-               PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+               EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
     proc = subprocess.Popen([sys.executable, str(OVERLAY / 'usr/bin/epilykos-hostd')], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
@@ -200,6 +242,25 @@ with tempfile.TemporaryDirectory() as d:
         r = call({'action': 'ssh_disable'})
         assert r['ok'] and not r['ssh']['enabled']
         ok('hostd SSH: add (no duplicates), remove by fingerprint, clear password, disable')
+
+        assert call({'action': 'status'})['port'] == 3000
+        r = call({'action': 'set_port', 'port': 8080})
+        assert r == {'ok': True, 'port': 8080}, r
+        assert (d / 'data/port').read_text() == '8080\n' and call({'action': 'status'})['port'] == 8080
+        assert call({'action': 'set_port', 'port': '8080'}) == {'ok': True, 'port': 8080}, 'unchanged: no restart'
+        for bad in (22, 70000, 'x', None, 5353):
+            r = call({'action': 'set_port', 'port': bad})
+            assert not r['ok'] and 'port' in r['error'], (bad, r)
+        with socket.socket() as busy:
+            busy.bind(('0.0.0.0', 0))
+            busy.listen()
+            taken = busy.getsockname()[1]
+            r = call({'action': 'set_port', 'port': taken})
+            assert not r['ok'] and 'already in use' in r['error'], r
+        assert call({'action': 'status'})['port'] == 8080
+        time.sleep(1.5)
+        assert calls.read_text().splitlines().count('--no-block restart epilykos.service') == 1
+        ok('hostd set_port: saved on DATA, Epilykos restarted once; bad, reserved and busy ports refused')
 
         assert call({'action': 'rm -rf /'}) == {'ok': False, 'error': 'unknown action'}
         assert call(None, raw=b'not json\n') == {'ok': False, 'error': 'malformed request'}

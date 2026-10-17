@@ -59,7 +59,8 @@ own partition layout).
   serdev attach on the PL011); the container uses it over D-Bus.
 - Epilykos: the image pinned by `manifests/<channel>.yaml` is preloaded
   for arm64 and started by `epilykos.service`; the app is at
-  `http://epilykos.local:3000`. Its data lives in
+  `http://epilykos.local:3000`, or on the port chosen in Epilykos
+  settings (80 drops the `:port`; kept in `/data/epilykos/port`). Its data lives in
   `/data/epilykos/app-data`; Podman's storage in `/data/containers`.
 - Boot health: `epilykos-mark-good.service` marks the slot good once
   `/data` is mounted, Podman works and the app's `/healthz` is healthy
@@ -72,8 +73,8 @@ own partition layout).
   `epilykos` (sudo) with a password and/or public keys, never root; all of
   it is kept on DATA (`/data/ssh`).
 - System actions in Epilykos settings (`C-HOST-001`): Restart, Shut down,
-  Change Wi-Fi (opens Bluetooth setup for 15 minutes) and the SSH
-  controls. The container reaches them only through `epilykos-hostd`, a
+  Change Wi-Fi (opens Bluetooth setup for 15 minutes), the dashboard port
+  and the SSH controls. The container reaches them only through `epilykos-hostd`, a
   socket that accepts exactly those actions. Shut down halts the Pi; it
   is safe to unplug once the green light stops flashing.
 

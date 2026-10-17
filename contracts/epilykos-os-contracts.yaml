@@ -323,7 +323,7 @@ contracts:
     hci_bcm, BCM43430A1.hcd from brcmfmac_sdio-firmware-rpi); bluetoothd is enabled; the container gets /run/dbus read-only
     and no capabilities. BlueZ 5.79''s default D-Bus policy already lets non-root callers reach org.bluez.'
   - The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port 3000 of
-    the box and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3
+    the box (or the port chosen in settings, C-HOST-001) and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3
     spike.
   evidence:
   - Stage 3 BLE hardware test report
@@ -665,6 +665,8 @@ contracts:
     password.'
   - Settings MUST also check for and install application updates through the same interface (update_status, update_check,
     update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
+  - Settings MUST let the administrator change the dashboard's port (set_port), 80 or 1024-65535 and free on the box; the
+    port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
   evidence:
   - 'Restart and shutdown from the dashboard: clean journal shutdown, no fsck repair on the next boot'
   - Unauthenticated request rejected

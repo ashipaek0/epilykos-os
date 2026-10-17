@@ -33,6 +33,8 @@ IWD_DIR = tempfile.mkdtemp(prefix='iwd-')
 os.environ['EPILYKOS_IWD_DIR'] = IWD_DIR
 WINDOW_FILE = os.path.join(tempfile.mkdtemp(prefix='run-'), 'wifi-setup-until')
 os.environ['EPILYKOS_WIFI_SETUP_FILE'] = WINDOW_FILE
+PORT_FILE = os.path.join(os.path.dirname(WINDOW_FILE), 'port')  # unset: the dashboard is on 3000
+os.environ['EPILYKOS_PORT_FILE'] = PORT_FILE
 sys.path.insert(0, str(OVERLAY / 'usr/lib/epilykos/python'))
 loader = importlib.machinery.SourceFileLoader('improv', str(OVERLAY / 'usr/bin/epilykos-improv'))
 spec = importlib.util.spec_from_loader('improv', loader)

@@ -32,6 +32,7 @@ import sys
 import time
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_port as dashboard_port  # noqa: E402
 import epilykos_wifi as wifi  # noqa: E402
 
 from dbus_fast import BusType, DBusError, Message, MessageType, Variant  # noqa: E402
@@ -70,7 +71,6 @@ APP_PATH = '/org/epilykos/improv'
 ADV_PATH = APP_PATH + '/advertisement0'
 NAME_ADV_PATH = APP_PATH + '/advertisement1'
 DEVICE_NAME = 'Epilykos'
-APP_PORT = 3000
 SETUP_WINDOW_S = int(os.environ.get('EPILYKOS_IMPROV_SETUP_WINDOW', '1800'))
 OFFLINE_GRACE_S = int(os.environ.get('EPILYKOS_IMPROV_OFFLINE_GRACE', '120'))
 DASHBOARD_WINDOW_FILE = os.environ.get('EPILYKOS_WIFI_SETUP_FILE', '/run/epilykos/wifi-setup-until')
@@ -587,7 +587,7 @@ class Improv:
             return
         log(f'joined "{net.display_ssid}" as {ip}')
         close_dashboard_window()
-        self.send_result(CMD_WIFI_SETTINGS, [f'http://{ip}:{APP_PORT}/'])
+        self.send_result(CMD_WIFI_SETTINGS, [dashboard_port.dashboard_url(ip)])
         self.set_state(STATE_PROVISIONED)
 
     # BlueZ registration

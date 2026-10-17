@@ -363,7 +363,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 **Implementation status**
 
 - Tier 1 image: the onboard BCM43438 comes up through the mainline device tree's serdev node on the PL011 (hci_uart + hci_bcm, BCM43430A1.hcd from brcmfmac_sdio-firmware-rpi); bluetoothd is enabled; the container gets /run/dbus read-only and no capabilities. BlueZ 5.79's default D-Bus policy already lets non-root callers reach org.bluez.
-- The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port 3000 of the box and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3 spike.
+- The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port 3000 of the box (or the port chosen in settings, C-HOST-001) and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3 spike.
 
 **Required evidence**
 
@@ -722,6 +722,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - The container MUST reach these host actions through one narrow host interface that accepts only these named actions; it MUST NOT gain general root access to the host.
 - The application's first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator password.
 - Settings MUST also check for and install application updates through the same interface (update_status, update_check, update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
+- Settings MUST let the administrator change the dashboard's port (set_port), 80 or 1024-65535 and free on the box; the port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
 
 **Required evidence**
 

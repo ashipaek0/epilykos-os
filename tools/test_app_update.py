@@ -13,6 +13,7 @@ throwaway key, a local feed, and stand-ins for podman and systemctl:
 - hostd answers update_status / update_check / update_apply on its socket
 """
 import json
+import fcntl
 import os
 import socket
 import subprocess
@@ -57,7 +58,8 @@ restart_rc = T / 'restart_rc'   # one exit code per line, consumed in order
 (T / 'podman').write_text(f'''#!/bin/sh
 echo "podman $*" >> {calls}
 case "$1" in
-  pull) [ -f {T}/pull_fails ] && {{ echo "Error: initializing source: manifest unknown" >&2; exit 125; }}; exit 0 ;;
+  pull) if flock -n {T}/maintenance.lock -c true; then echo "maintenance lock missing" >&2; exit 125; fi
+        [ -f {T}/pull_fails ] && {{ echo "Error: initializing source: manifest unknown" >&2; exit 125; }}; exit 0 ;;
   image) case "$2" in
     inspect) case "$5" in
       *{DIG1}) echo {ID_FOR[DIG1]} ;; *{DIG2}) echo {ID_FOR[DIG2]} ;; *{DIG3}) echo {ID_FOR[DIG3]} ;; esac ;;
@@ -68,13 +70,14 @@ exit 0
 ''')
 (T / 'systemctl').write_text(f'''#!/bin/sh
 echo "systemctl $* active=$(sed -n 's/^EPILYKOS_ACTIVE_IMAGE_ID=//p' {state}/active.env 2>/dev/null)" >> {calls}
+if flock -n {T}/maintenance.lock -c true; then echo "maintenance lock missing" >&2; exit 125; fi
 rc=$(head -n1 {restart_rc} 2>/dev/null); sed -i 1d {restart_rc} 2>/dev/null
 exit ${{rc:-0}}
 ''')
 for f in ('podman', 'systemctl'):
     os.chmod(T / f, 0o755)
 
-os.environ.update(EPILYKOS_UPDATE_DIR=str(state), EPILYKOS_IMAGE_ENV=str(T / 'image.env'),
+os.environ.update(EPILYKOS_MAINTENANCE_LOCK=str(T / 'maintenance.lock'), EPILYKOS_UPDATE_DIR=str(state), EPILYKOS_IMAGE_ENV=str(T / 'image.env'),
                   EPILYKOS_APP_PUBKEY=str(T / 'missing.pub'), EPILYKOS_UPDATE_URL=f'file://{feed}',
                   EPILYKOS_PODMAN=str(T / 'podman'), EPILYKOS_SYSTEMCTL=str(T / 'systemctl'))
 sys.path.insert(0, str(PYLIB))
@@ -95,6 +98,7 @@ def publish(seq, digest, release, channel='dev', key='release', tamper=False):
 def wait_idle():
     for _ in range(200):
         if not up._running.is_set():
+            assert subprocess.run(['flock', '-n', str(T / 'maintenance.lock'), '-c', 'true']).returncode == 0, 'maintenance released after job ends'
             return
         time.sleep(0.02)
     raise AssertionError('update did not finish')
@@ -136,6 +140,18 @@ except up.UpdateError as e:
 publish(8, DIG1, '2.8.0-dev+bbbb')
 up.check()
 calls.write_text('')
+# A backup/restore in another process must exclude update allocation/restart.
+with open(T / 'maintenance.lock', 'a+') as held:
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        up.apply('app')
+    except up.UpdateError as e:
+        assert 'maintenance' in str(e).lower(), e
+    else:
+        raise AssertionError('update started while app maintenance owned the shared lock')
+    assert not (state / 'job.json').exists()
+    assert not calls.read_text(), 'refused update must not pull or restart'
+ok('apply: shared app maintenance refuses an update before allocating or restarting')
 r = up.apply('app')
 assert r == {'ok': True, 'state': 'applying', 'message': 'Downloading the update'}, r
 wait_idle()
@@ -214,7 +230,7 @@ run = run.replace('/usr/lib/epilykos/image.env', str(T / 'image.env')).replace('
 (T / 'run.sh').write_text(run)
 bin_dir = T / 'bin'
 bin_dir.mkdir()
-(bin_dir / 'podman').write_text(f'#!/bin/sh\n[ "$1" = image ] && exit 0\necho "$@" | awk \'{{print $NF}}\' > {T}/started\n')
+(bin_dir / 'podman').write_text(f'#!/bin/sh\n[ "$1" = image ] && exit 0\nfor arg; do echo "$arg"; done > {T}/run-args\necho "$@" | awk \'{{print $NF}}\' > {T}/started\n')
 os.chmod(bin_dir / 'podman', 0o755)
 
 
@@ -224,6 +240,9 @@ def started():
 
 
 assert started() == ID_FOR[DIG2]
+run_args = (T / 'run-args').read_text().splitlines()
+i = run_args.index('EPILYKOS_MAINTENANCE_LOCK=/app/data/.maintenance.lock')
+assert run_args[i - 1] == '--env', 'OS must opt the app into the shared lock'
 (state / 'active.env').write_text(f'EPILYKOS_ACTIVE_IMAGE_ID={ID_FOR[DIG1]}\nEPILYKOS_ACTIVE_SEQUENCE=6\n')
 assert started() == BASE_ID, 'an OS slot with a newer preloaded image wins'
 (state / 'active.env').write_text('EPILYKOS_ACTIVE_IMAGE_ID=$(reboot)\nEPILYKOS_ACTIVE_SEQUENCE=99\n')

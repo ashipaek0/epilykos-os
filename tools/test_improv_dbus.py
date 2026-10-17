@@ -92,6 +92,7 @@ class FakeAdapter(ServiceInterface):
         super().__init__('org.bluez.Adapter1')
         self.powered = False
         self.alias = 'BlueZ'
+        self.pairable = True
 
     @dbus_property()
     def Powered(self) -> 'b':
@@ -108,6 +109,14 @@ class FakeAdapter(ServiceInterface):
     @Alias.setter
     def Alias(self, v: 's'):
         self.alias = v
+
+    @dbus_property()
+    def Pairable(self) -> 'b':
+        return self.pairable
+
+    @Pairable.setter
+    def Pairable(self, v: 'b'):
+        self.pairable = v
 
 
 class FakeGattManager(ServiceInterface):
@@ -253,7 +262,7 @@ async def main():
     found = await service.find_adapter()
     assert found == '/org/bluez/hci0', found
     await service.register(found)
-    assert adapter.powered and adapter.alias == 'Epilykos'
+    assert adapter.powered and adapter.alias == 'Epilykos' and not adapter.pairable, 'powered, named, not pairable'
     uuids = sorted(v['org.bluez.GattCharacteristic1']['UUID'].value
                    for v in gatt.objects.values() if 'org.bluez.GattCharacteristic1' in v)
     assert uuids == sorted([improv.STATE_UUID, improv.ERROR_UUID, improv.RPC_COMMAND_UUID,

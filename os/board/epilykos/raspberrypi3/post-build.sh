@@ -48,6 +48,12 @@ chmod 0440 "${TARGET_DIR}/etc/sudoers.d/epilykos"
 # the root is read-only, so systemd can't fix the mode at boot and warns.
 [ ! -d "${TARGET_DIR}/etc/bluetooth" ] || chmod 0555 "${TARGET_DIR}/etc/bluetooth"
 
+# The clock never starts before this build: systemd moves it forward to
+# this file's time at boot. Without it a fresh card started at systemd's
+# own release date (months back) until network time arrived; after that,
+# the time saved on DATA (/data/timesync) is later and wins.
+touch "${TARGET_DIR}/usr/lib/clock-epoch"
+
 # -- Preloaded application image --
 test -f "${MANIFEST}" || { echo "post-build: no manifest ${MANIFEST}" >&2; exit 1; }
 

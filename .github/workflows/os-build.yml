@@ -221,6 +221,10 @@ jobs:
           test -x "$TARGET_DIR/usr/sbin/sshd" && test -x "$TARGET_DIR/usr/bin/ssh-keygen" || { echo "OpenSSH server or ssh-keygen missing"; exit 1; }
           # epilykos_ssh hashes the SSH password with libcrypt through ctypes.
           ls "$TARGET_DIR"/usr/lib/libcrypt.so.[12] >/dev/null 2>&1 || { echo "libcrypt.so.2 / .so.1 missing (SSH password hashing)"; exit 1; }
+          # Bluetooth LE only (no classic pairing), Wi-Fi power saving off, clock floor.
+          grep -qx 'ControllerMode = le' "$TARGET_DIR/etc/bluetooth/main.conf" || { echo "BlueZ is not LE-only"; exit 1; }
+          test -x "$TARGET_DIR/usr/sbin/iw" && grep -q 'power_save off' "$TARGET_DIR/usr/lib/udev/rules.d/80-epilykos-wifi-powersave.rules" || { echo "Wi-Fi power-save rule or iw missing"; exit 1; }
+          test -f "$TARGET_DIR/usr/lib/clock-epoch" || { echo "/usr/lib/clock-epoch missing"; exit 1; }
           # Users and setuid bits are applied on the filesystem's own copy
           # of the target directory: read them from the image.
           debugfs -R "stat /usr/bin/sudo" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | grep -Eq 'Mode: +04755' || { echo "sudo missing or not setuid"; exit 1; }

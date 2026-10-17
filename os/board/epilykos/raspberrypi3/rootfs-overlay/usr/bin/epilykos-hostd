@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """The narrow host interface the Epilykos container uses for system actions
-(C-HOST-001): Restart, Shut down, Change Wi-Fi, the SSH controls, and
-application updates (C-UPDATE-002/004, epilykos_update).
+(C-HOST-001): Restart, Shut down, Change Wi-Fi, the SSH controls, the
+dashboard port, and application updates (C-UPDATE-002/004, epilykos_update).
 
 Listens on /run/epilykos-host/host.sock, which only root and the
 container's app user (gid 1000) can open; the container sees the same
@@ -15,6 +15,7 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "ssh_clear_password"}
     {"action": "ssh_add_key", "key": "ssh-ed25519 AAAA... name"}
     {"action": "ssh_remove_key", "fingerprint": "SHA256:..."}
+    {"action": "set_port", "port": 8080}         dashboard port; restarts the app on it
     {"action": "update_status"}                 installing? how did the last update end?
     {"action": "update_check"}                  is a newer signed app release out?
     {"action": "update_apply", "target": "app"} install it (replies at once, then works)
@@ -33,6 +34,7 @@ import threading
 import time
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_update as update  # noqa: E402
 
@@ -87,7 +89,7 @@ def handle(req):
     action = req.get('action')
     if action == 'status':
         return {'ok': True, 'appliance': True, 'os_version': os_version(),
-                'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status()}
+                'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status(), 'port': port.read()}
     if action == 'restart':
         log('restart requested from Epilykos settings')
         later(lambda: systemctl('reboot'))
@@ -131,6 +133,16 @@ def handle(req):
         ssh.remove_key(str(req.get('fingerprint', '')))
         log(f'SSH key {req.get("fingerprint")} removed from Epilykos settings')
         return {'ok': True, 'ssh': ssh.status()}
+    if action == 'set_port':
+        new = port.validate(req.get('port'))
+        if new == port.read():
+            return {'ok': True, 'port': new}
+        if port.in_use(new):
+            raise port.PortError(f'port {new} is already in use on the box')
+        port.write(new)
+        log(f'dashboard port set to {new} from Epilykos settings; restarting Epilykos')
+        later(lambda: systemctl('restart', 'epilykos.service'))
+        return {'ok': True, 'port': new}
     if action == 'update_status':
         return update.status()
     if action == 'update_check':
@@ -155,7 +167,7 @@ class Handler(socketserver.StreamRequestHandler):
                 if not isinstance(req, dict):
                     raise ValueError('not an object')
                 reply = handle(req)
-            except (ssh.SshError, update.UpdateError) as e:
+            except (ssh.SshError, port.PortError, update.UpdateError) as e:
                 reply = {'ok': False, 'error': str(e)}
             except (ValueError, UnicodeError):
                 reply = {'ok': False, 'error': 'malformed request'}

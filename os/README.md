@@ -51,15 +51,22 @@ own partition layout).
   Podman's storage, Wi-Fi networks, Bluetooth pairings, the last known
   time and the journal (64 MB cap, so `journalctl -b -1` shows the
   previous boot). The machine ID is kept in the U-Boot environment. Swap
-  is 256 MB of compressed RAM (zram), never the SD card.
+  is 256 MB of compressed RAM (zram), never the SD card. The clock never
+  starts earlier than the image's build (`/usr/lib/clock-epoch`).
 - Networking: DHCP on wired Ethernet and Wi-Fi (Ethernet preferred when
   both are up), reachable as `epilykos.local` (mDNS). Wi-Fi is iwd; known
   networks are kept on DATA (`/data/iwd`) so they survive OS updates.
+  Wi-Fi power saving is off: on the Pi 3B it makes the box miss ARP
+  requests, so other devices lose it on the LAN.
 - Bluetooth: BlueZ with the onboard radio (its firmware and the mainline
-  serdev attach on the PL011); the container uses it over D-Bus.
+  serdev attach on the PL011); the container uses it over D-Bus. Low
+  Energy only and not pairable: setup and the app's BMS/inverter links
+  need neither, and a desktop that paired over classic Bluetooth no
+  longer found the Wi-Fi setup service.
 - Epilykos: the image pinned by `manifests/<channel>.yaml` is preloaded
   for arm64 and started by `epilykos.service`; the app is at
-  `http://epilykos.local:3000`. Its data lives in
+  `http://epilykos.local:3000`, or on the port chosen in Epilykos
+  settings (80 drops the `:port`; kept in `/data/epilykos/port`). Its data lives in
   `/data/epilykos/app-data`; Podman's storage in `/data/containers`.
 - Boot health: `epilykos-mark-good.service` marks the slot good once
   `/data` is mounted, Podman works and the app's `/healthz` is healthy
@@ -71,10 +78,14 @@ own partition layout).
   settings, or with an `authorized_keys` file on BOOT. It is for user
   `epilykos` (sudo) with a password and/or public keys, never root; all of
   it is kept on DATA (`/data/ssh`).
+- Forgotten dashboard password: a `dashboard-password.txt` on BOOT (the
+  new password on its first line, read before Epilykos starts, then
+  deleted) or `epilykos-reset-password` on the console. Neither works
+  over the network.
 - System actions in Epilykos settings (`C-HOST-001`): Restart, Shut down,
-  Change Wi-Fi (opens Bluetooth setup for 15 minutes) and the SSH
-  controls. The container reaches them only through `epilykos-hostd`, a
-  socket that accepts exactly those actions. Shut down halts the Pi; it
+  Change Wi-Fi (opens Bluetooth setup for 15 minutes), the dashboard port
+  and the SSH controls. The container reaches them only through
+  `epilykos-hostd`, a socket that accepts exactly those actions. Shut down halts the Pi; it
   is safe to unplug once the green light stops flashing.
 
 ## Wi-Fi setup

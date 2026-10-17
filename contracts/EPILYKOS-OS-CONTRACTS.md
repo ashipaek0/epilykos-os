@@ -2,7 +2,7 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.6.1-draft  
+**Version:** 0.6.2-draft  
 **Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
 **Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
 **Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
@@ -364,7 +364,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 **Implementation status**
 
 - Tier 1 image: the onboard BCM43438 comes up through the mainline device tree's serdev node on the PL011 (hci_uart + hci_bcm, BCM43430A1.hcd from brcmfmac_sdio-firmware-rpi); bluetoothd is enabled; the container gets /run/dbus read-only and no capabilities. BlueZ 5.79's default D-Bus policy already lets non-root callers reach org.bluez.
-- The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port 3000 of the box and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3 spike.
+- The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port 3000 of the box (or the port chosen in settings, C-HOST-001) and Tuya LAN discovery works; Bluetooth access is unchanged by it. Hardware confirmation is still the Stage 3 spike.
 
 **Required evidence**
 
@@ -593,6 +593,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - Wi-Fi without a terminal, three ways: (1) wifi.txt on the BOOT partition (template wifi-example.txt ships there); (2) Raspberry Pi Imager settings, via an OS list (tools/imager_os_list.py) declaring init_format systemd, imported from firstrun.sh / network-config / rpi-preseed.toml without running them; (3) Bluetooth LE using the open Improv Wi-Fi protocol (epilykos-improv), usable from a Web Bluetooth browser or Home Assistant.
 - Deviation from the letter of this contract: there is no Wi-Fi access point or captive portal; Bluetooth setup takes its place. It is offered whenever no network address is held, and for 30 minutes after boot while no Wi-Fi is configured. Re-entry by physical gesture is not implemented (D-PROV-001 open), so anyone in Bluetooth range can offer Wi-Fi while the box is offline.
 - Secrets: imported BOOT files are deleted after import; credentials are stored only in iwd network files (0600) on DATA; no setup path logs a password (covered by tools/test_wifi_provisioning.py and tools/test_improv_dbus.py).
+- The Bluetooth controller runs Low Energy only (BlueZ ControllerMode = le) and is not pairable: setup needs no pairing, and a laptop that had paired over classic Bluetooth no longer found the Improv service (Pi 3B, 2026-10-17).
 
 **Required evidence**
 
@@ -724,6 +725,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - The container MUST reach these host actions through one narrow host interface that accepts only these named actions; it MUST NOT gain general root access to the host.
 - The application's first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator password.
 - Settings MUST also check for and install application updates through the same interface (update_status, update_check, update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
+- Settings MUST let the administrator change the dashboard's port (set_port), 80 or 1024-65535 and free on the box; the port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
+- A forgotten dashboard password MUST be replaceable with physical access only, never over the network: dashboard-password.txt on BOOT (read once before the app starts, then deleted) or epilykos-reset-password on the console.
 
 **Required evidence**
 
@@ -917,6 +920,12 @@ A reviewer should be able to trace every release-blocking contract to concrete e
 The architecture is ready for implementation when all Stage 0 decisions are frozen where required, the complete later-stage decision backlog has been reviewed and assigned due stages, and this document plus `epilykos-os-contracts.yaml` are accepted as the source of truth. From that point onward, narrative architecture documents are explanatory; a code change that conflicts with a contract must either change the contract through review or be rejected.
 
 ## 12. Changelog
+
+### 0.6.2-draft
+
+- C-HOST-001: the dashboard port can be changed in settings (set_port); a forgotten dashboard password is replaced from BOOT or the console.
+- C-PROV-002: Bluetooth is Low Energy only and not pairable; "Change Wi-Fi" after a completed setup no longer fails with "Maximum advertisements reached".
+- Pi 3B hardware fixes: SSH password hashing (libcrypt.so.2), Wi-Fi power saving off, clock never before the build.
 
 ### 0.6.1-draft
 

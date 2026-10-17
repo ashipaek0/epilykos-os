@@ -17,12 +17,16 @@ Passwords are never logged (C-PROV-002).
 SSH (C-ACCESS-001) can be turned on the same way: Imager's SSH settings in
 firstrun.sh (password or public keys for its user, applied to user
 epilykos), or an authorized_keys file in the root of BOOT.
+
+A forgotten dashboard password is replaced by dashboard-password.txt (the
+new password on its first line), read before Epilykos starts and deleted.
 """
 import os
 import subprocess
 import sys
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_dashboard as dashboard  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_wifi as wifi  # noqa: E402
 
@@ -81,6 +85,31 @@ def import_ssh_files():
                 boot_rw(False)
 
 
+def import_dashboard_password():
+    path = os.path.join(BOOT, dashboard.BOOT_FILE)
+    if not os.path.isfile(path):
+        return
+    with open(path, 'rb') as f:
+        data = f.read()
+    name = dashboard.BOOT_FILE
+    if wifi.is_blank(data):
+        log(f'{name}: not used (the file is empty; if it was just saved, the card may have been '
+            'removed before the computer finished writing it); left in place')
+        return
+    try:
+        dashboard.set_password(dashboard.parse_boot_file(wifi.decode_boot_file(data)))
+    except (dashboard.PasswordError, UnicodeError) as e:
+        log(f'{name}: not used ({e}); left in place')
+        return
+    log(f'{name}: dashboard password replaced')
+    if boot_rw(True):
+        try:
+            os.unlink(path)
+            log(f'removed {name} from BOOT')
+        finally:
+            boot_rw(False)
+
+
 def import_boot_files():
     found = [(name, parse) for name, parse in wifi.BOOT_SOURCES
              if os.path.isfile(os.path.join(BOOT, name))]
@@ -133,6 +162,7 @@ def apply_country():
 def main():
     if os.path.isdir(BOOT):
         import_ssh_files()
+        import_dashboard_password()
         import_boot_files()
     else:
         log(f'{BOOT} is not mounted; nothing to import')

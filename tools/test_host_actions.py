@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Self-tests for the dashboard's system actions on the host (C-HOST-001)
 and the SSH maintenance login (C-ACCESS-001): epilykos_ssh, epilykos-hostd
-over its real Unix socket (with a fake systemctl), and SSH settings
-imported from BOOT by epilykos-wifi-import. Passwords never reach a log.
+over its real Unix socket (with a fake systemctl), SSH settings imported
+from BOOT by epilykos-wifi-import, the dashboard port (epilykos_port, and
+the same rules in epilykos-run), and the dashboard password reset
+(dashboard-password.txt on BOOT, epilykos-reset-password). Passwords never
+reach a log.
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -18,6 +22,8 @@ ROOT = Path(__file__).resolve().parent.parent
 OVERLAY = ROOT / 'os/board/epilykos/raspberrypi3/rootfs-overlay'
 PYLIB = OVERLAY / 'usr/lib/epilykos/python'
 sys.path.insert(0, str(PYLIB))
+import epilykos_dashboard as dashboard  # noqa: E402
+import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 
 SECRET = 'correct horse battery'
@@ -50,6 +56,35 @@ expect(ssh.SshError, ssh.hash_password, 'short')
 expect(ssh.SshError, ssh.validate_hash, '$1$md5$weak')
 expect(ssh.SshError, ssh.validate_hash, 'plaintext')
 ok('password: sha512crypt that crypt(3) verifies; short passwords and weak or plain hashes refused')
+
+# On the image libxcrypt is only libcrypt.so.2 and find_library() finds
+# nothing (Pi 3B, 2026-10-17: "libcrypt.so.1: cannot open shared object file").
+import ctypes.util  # noqa: E402
+real_cdll, real_find, tried = ctypes.CDLL, ctypes.util.find_library, []
+
+
+def image_cdll(name, *a, **kw):
+    tried.append(name)
+    if name != 'libcrypt.so.2':
+        raise OSError(f'{name}: cannot open shared object file: No such file or directory')
+    return real_cdll(real_find('crypt') or 'libcrypt.so.1', *a, **kw)
+
+
+ctypes.CDLL, ctypes.util.find_library = image_cdll, lambda name: None
+try:
+    assert ssh.hash_password(SECRET).startswith('$6$') and tried == ['libcrypt.so.2']
+    tried.clear()
+
+
+    def no_cdll(name, *a, **kw):
+        tried.append(name)
+        raise OSError(f'{name}: cannot open shared object file')
+    ctypes.CDLL = no_cdll
+    expect(OSError, ssh.hash_password, SECRET)
+    assert tried == ['libcrypt.so.2', 'libcrypt.so.1']
+finally:
+    ctypes.CDLL, ctypes.util.find_library = real_cdll, real_find
+ok('password: libcrypt.so.2 is used when that is all the image has')
 
 t, blob, comment = ssh.parse_key(KEY)
 assert (t, comment) == ('ssh-ed25519', 'fola@laptop')
@@ -107,6 +142,46 @@ expect(ssh.SshError, ssh.parse_authorized_keys, f'{KEY}\nnot a key\n')
 expect(ssh.SshError, ssh.parse_authorized_keys, '# nothing\n')
 ok('authorized_keys on BOOT: all keys or nothing')
 
+# -- dashboard port ------------------------------------------------------------------
+for good in (80, 1024, 3000, 8080, 65535, '8080', ' 8443 '):
+    assert port.validate(good) == int(str(good).strip()), good
+for bad in (0, 22, 443, 1023, 65536, 5353, 5355, -1, True, None, '80x', '', 80.0):
+    expect(port.PortError, port.validate, bad)
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, 'epilykos', 'port')
+    assert port.read(f) == 3000, 'unset: 3000'
+    assert port.write(8080, f) == 8080 and open(f).read() == '8080\n' and port.read(f) == 8080
+    for junk in ('22\n', 'abc\n', '', '5353\n'):
+        open(f, 'w').write(junk)
+        assert port.read(f) == 3000, junk
+assert port.dashboard_url('192.0.2.10', 80) == 'http://192.0.2.10/'
+assert port.dashboard_url('192.0.2.10', 8080) == 'http://192.0.2.10:8080/'
+with socket.socket() as busy:
+    busy.bind(('127.0.0.1', 0))
+    busy.listen()
+    taken = busy.getsockname()[1]
+    assert port.in_use(taken), 'a listening port is in use'
+assert not port.in_use(taken), 'a closed port is free'
+ok('port: 80 or 1024-65535 (not mDNS/LLMNR), 3000 when unset or unreadable, in-use check, dashboard URL')
+
+# epilykos-run must read the file with the same rules (it is sh, not Python).
+run_sh = (OVERLAY / 'usr/bin/epilykos-run').read_text()
+block = run_sh[run_sh.index('PORT=3000\n'):]
+block = block[:block.index('\nfi\n') + 4]
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, 'port')
+    for content, want in (('8080\n', '8080'), ('80\n', '80'), ('65535', '65535'), ('22\n', '3000'), ('0080\n', '3000'),
+                          ('5353\n', '3000'), ('99999\n', '3000'), ('8080; reboot\n', '3000'), ('', '3000'), (None, '3000')):
+        if content is None:
+            os.path.exists(f) and os.unlink(f)
+        else:
+            open(f, 'w').write(content)
+        got = subprocess.run(['sh', '-ec', block.replace('/data/epilykos/port', f) + 'echo "$PORT"'],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        assert got == want, (content, got)
+assert '--env PORT="${PORT}"' in run_sh and "127.0.0.1:${PORT}/healthz" in run_sh
+ok('epilykos-run: same port rules, passes PORT to the app and its health check')
+
 # -- epilykos-hostd over its socket --------------------------------------------------
 with tempfile.TemporaryDirectory() as d:
     d = Path(d)
@@ -119,7 +194,7 @@ with tempfile.TemporaryDirectory() as d:
     fake.chmod(0o755)
     env = dict(os.environ, EPILYKOS_HOST_SOCKET=str(sock), EPILYKOS_RUN_DIR=str(run), EPILYKOS_SSH_DIR=str(sshdir),
                EPILYKOS_SYSTEMCTL=str(fake), EPILYKOS_APP_GID=str(os.getgid()),
-               PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+               EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
     proc = subprocess.Popen([sys.executable, str(OVERLAY / 'usr/bin/epilykos-hostd')], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
@@ -172,6 +247,25 @@ with tempfile.TemporaryDirectory() as d:
         assert r['ok'] and not r['ssh']['enabled']
         ok('hostd SSH: add (no duplicates), remove by fingerprint, clear password, disable')
 
+        assert call({'action': 'status'})['port'] == 3000
+        r = call({'action': 'set_port', 'port': 8080})
+        assert r == {'ok': True, 'port': 8080}, r
+        assert (d / 'data/port').read_text() == '8080\n' and call({'action': 'status'})['port'] == 8080
+        assert call({'action': 'set_port', 'port': '8080'}) == {'ok': True, 'port': 8080}, 'unchanged: no restart'
+        for bad in (22, 70000, 'x', None, 5353):
+            r = call({'action': 'set_port', 'port': bad})
+            assert not r['ok'] and 'port' in r['error'], (bad, r)
+        with socket.socket() as busy:
+            busy.bind(('0.0.0.0', 0))
+            busy.listen()
+            taken = busy.getsockname()[1]
+            r = call({'action': 'set_port', 'port': taken})
+            assert not r['ok'] and 'already in use' in r['error'], r
+        assert call({'action': 'status'})['port'] == 8080
+        time.sleep(1.5)
+        assert calls.read_text().splitlines().count('--no-block restart epilykos.service') == 1
+        ok('hostd set_port: saved on DATA, Epilykos restarted once; bad, reserved and busy ports refused')
+
         assert call({'action': 'rm -rf /'}) == {'ok': False, 'error': 'unknown action'}
         assert call(None, raw=b'not json\n') == {'ok': False, 'error': 'malformed request'}
         assert call(None, raw=b'[1,2]\n') == {'ok': False, 'error': 'malformed request'}
@@ -218,5 +312,77 @@ for name, files, expect_keys, expect_pw in [
         assert os.listdir(boot) == [], (name, os.listdir(boot))
         assert h not in out and SECRET not in out
 ok('BOOT import: Imager key-only and password modes and authorized_keys turn SSH on; files removed; nothing logged')
+
+# -- dashboard password reset -----------------------------------------------------------
+NEW_PW = 'new dashboard pass'
+NODE_VERIFY = ('const c=require("crypto"),[s,h]=require("fs").readFileSync(process.argv[1],"utf8").split(":");'
+               'process.exit(c.timingSafeEqual(c.scryptSync(process.argv[2],s,64),Buffer.from(h,"hex"))?0:1)')
+
+
+def app_accepts(path, password):
+    """What the app's sessionAuth.verifyPassword computes, run by Node when it is here."""
+    if not dashboard.verify(password, path):
+        return False
+    if shutil.which('node'):
+        return subprocess.run(['node', '-e', NODE_VERIFY, path, password]).returncode == 0
+    return True
+
+
+with tempfile.TemporaryDirectory() as d:
+    f = os.path.join(d, 'settings-password')
+    dashboard.set_password(NEW_PW, f)
+    assert oct(os.stat(f).st_mode & 0o777) == '0o600'
+    assert app_accepts(f, NEW_PW) and not app_accepts(f, NEW_PW + 'x')
+    for bad in ('abc', 'x' * 129, 'tab\there', None):
+        expect(dashboard.PasswordError, dashboard.set_password, bad, f)
+    assert dashboard.parse_boot_file('\ufeff\n  ' + NEW_PW + '  \r\nignored\n') == NEW_PW
+    expect(dashboard.PasswordError, dashboard.parse_boot_file, '\n \n')
+ok('dashboard password: stored as the app stores it (Node verifies it), 4-128 characters, first line of the file')
+
+for label, data, replaced in [
+        ('UTF-8', (NEW_PW + '\n').encode(), True),
+        ('UTF-16 (Windows Notepad)', ('\ufeff' + NEW_PW + '\r\n').encode('utf-16-le'), True),
+        ('blank (card pulled too soon)', b'', False),
+        ('too short', b'abc\n', False)]:
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        boot = d / 'boot'
+        boot.mkdir()
+        (boot / 'dashboard-password.txt').write_bytes(data)
+        pwfile = d / 'app-data/settings-password'
+        env = dict(os.environ, EPILYKOS_BOOT_DIR=str(boot), EPILYKOS_IWD_DIR=str(d / 'iwd'), EPILYKOS_RUN_DIR=str(d),
+                   EPILYKOS_SSH_DIR=str(d / 'ssh'), EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'country'),
+                   EPILYKOS_DASHBOARD_PASSWORD_FILE=str(pwfile), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+        r = subprocess.run([sys.executable, str(OVERLAY / 'usr/bin/epilykos-wifi-import')], env=env,
+                           capture_output=True, text=True)
+        out = r.stdout + r.stderr
+        assert r.returncode == 0 and NEW_PW not in out, out
+        if replaced:
+            assert app_accepts(str(pwfile), NEW_PW) and os.listdir(boot) == [], (label, out)
+            assert 'dashboard password replaced' in out
+        else:
+            assert not pwfile.exists() and os.listdir(boot) == ['dashboard-password.txt'], (label, out)
+            assert 'left in place' in out, out
+ok('dashboard-password.txt on BOOT: replaces the password (UTF-8 or UTF-16) and is deleted; blank or short left in place')
+
+with tempfile.TemporaryDirectory() as d:
+    d = Path(d)
+    calls = d / 'systemctl.log'
+    fake = d / 'systemctl'
+    fake.write_text(f'#!/bin/sh\necho "$@" >> {calls}\n')
+    fake.chmod(0o755)
+    pwfile = d / 'settings-password'
+    env = dict(os.environ, EPILYKOS_DASHBOARD_PASSWORD_FILE=str(pwfile), EPILYKOS_SYSTEMCTL=str(fake),
+               PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+    cmd = [sys.executable, str(OVERLAY / 'usr/bin/epilykos-reset-password')]
+    r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\nsomething else\n', capture_output=True, text=True)
+    assert r.returncode == 1 and "don't match" in r.stderr and not pwfile.exists() and not calls.exists()
+    r = subprocess.run(cmd, env=env, input='abc\nabc\n', capture_output=True, text=True)
+    assert r.returncode == 1 and '4 to 128' in r.stderr and not pwfile.exists()
+    r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\n{NEW_PW}\n', capture_output=True, text=True)
+    assert r.returncode == 0 and app_accepts(str(pwfile), NEW_PW), r.stderr
+    assert calls.read_text().splitlines() == ['--no-block restart epilykos.service']
+    assert NEW_PW not in r.stdout + r.stderr
+ok('epilykos-reset-password: asks twice, refuses a mismatch or a short one, saves it and restarts Epilykos')
 
 print('\nPASS host action self-tests')

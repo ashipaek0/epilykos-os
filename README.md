@@ -16,6 +16,15 @@ EpilykosOS turns a Raspberry Pi into an [Epilykos](https://github.com/ashipaek0/
 - Plug in Ethernet, or give it your Wi-Fi from your phone over Bluetooth, add wifi credentials via Raspberry Pi Imager's settings, or with a small wifi.txt file in the boot partition of the SD card.
 - Then open `http://epilykos.local:3000` in a browser.
 - The site time zone is set during setup, so daily totals and forecasts follow local time.
+- The dashboard's port can be changed in Settings → System; port 80 makes the address just `http://epilykos.local`.
+
+## If something goes wrong
+
+**Can't open the dashboard?** From another computer, try to ping a third device on the same network. If that fails too, the router is keeping devices apart: check its "AP isolation" or "client isolation" settings and restart it. Plugging the Pi into Ethernet also works.
+
+**Forgot the dashboard password?** Put a file named `dashboard-password.txt` with the new password on its first line on the SD card's boot drive, then start the Pi. The file is deleted once it is used. With a keyboard and screen, `epilykos-reset-password` does the same.
+
+**Wi-Fi setup not showing on improv-wifi.com?** Use "Change Wi-Fi" in Settings → System, and don't pair the Pi in your computer's Bluetooth menu: setup doesn't need it.
 
 ## What it does
 

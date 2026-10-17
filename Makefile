@@ -13,6 +13,8 @@ render:
 
 ## Self-test the validator against deliberately broken fixtures.
 test:
+	$(PYTHON) tools/test_release_gates.py
+	$(PYTHON) tools/test_image_permissions.py
 	$(PYTHON) tools/test_validate_contracts.py
 	$(PYTHON) tools/test_sync_app_release.py
 	$(PYTHON) tools/test_wifi_provisioning.py

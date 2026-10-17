@@ -2,7 +2,7 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.6.0-draft  
+**Version:** 0.6.1-draft  
 **Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
 **Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
 **Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
@@ -93,6 +93,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Release notes MUST state, per board, whether that release has hardware evidence. A Tier 2 board without evidence MUST be labelled untested.
 - Community hardware evidence for Tier 2 is accepted in the standard evidence format with the tester and board revision recorded; it never blocks a release.
 - A feature that exists only on Tier 2 hardware (USB gadget provisioning, onboard RTC, NVMe boot) MUST be optional and MUST NOT be required by any stage gate.
+- Each supported board gets its own image, built from the shared tree with board-specific kernel, firmware and boot configuration, and its own RAUC compatible string, so one board's update cannot install on another. Tier 2 images are not built until Tier 2 work starts.
 
 **Required evidence**
 
@@ -406,6 +407,7 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Stable releases SHOULD carry a vX.Y.Z git tag in the originating repository. The tag and release string are descriptive; the manifest sequence remains the only ordering primitive (C-UPDATE-002).
 - Mutable tags (latest, dev) MAY be used to discover a build but MUST be resolved to a recorded digest before any manifest or image preload references it.
 - Merging dev into main in the application repository is the release: CI MUST then tag vX.Y.Z, publish the digest records, update and merge the stable application manifest in epilykos-os, and build the stable OS image, with no further manual step. A failing check at any step stops the release there.
+- Stable OS images are published as GitHub Releases of epilykos-os: the SD card image (.zst) and a Raspberry Pi Imager OS list (the newest release's list is at releases/latest/download/epilykos-os-imager.json). Test builds from dev and other branches are CI artifacts only, kept 14 days.
 
 **Implementation status**
 
@@ -915,6 +917,11 @@ A reviewer should be able to trace every release-blocking contract to concrete e
 The architecture is ready for implementation when all Stage 0 decisions are frozen where required, the complete later-stage decision backlog has been reviewed and assigned due stages, and this document plus `epilykos-os-contracts.yaml` are accepted as the source of truth. From that point onward, narrative architecture documents are explanatory; a code change that conflicts with a contract must either change the contract through review or be rejected.
 
 ## 12. Changelog
+
+### 0.6.1-draft
+
+- C-HW-001: one image per board (Pi 4 and Pi 5 later, not yet built), not one image for all boards.
+- C-RELEASE-001: stable images are hosted as GitHub Releases with the .zst image and a Raspberry Pi Imager OS list; test builds stay 14-day CI artifacts.
 
 ### 0.6.0-draft
 

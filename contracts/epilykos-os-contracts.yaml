@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.6.0-draft
+  version: 0.6.1-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -79,6 +79,9 @@ contracts:
     recorded; it never blocks a release.
   - A feature that exists only on Tier 2 hardware (USB gadget provisioning, onboard RTC, NVMe boot) MUST be optional and MUST
     NOT be required by any stage gate.
+  - Each supported board gets its own image, built from the shared tree with board-specific kernel, firmware and boot configuration,
+    and its own RAUC compatible string, so one board's update cannot install on another. Tier 2 images are not built until
+    Tier 2 work starts.
   evidence:
   - CI build logs for every Tier 1 and Tier 2 image
   - Pinned upstream board-support references (repository + revision) per Tier 2 board
@@ -379,6 +382,9 @@ contracts:
   - 'Merging dev into main in the application repository is the release: CI MUST then tag vX.Y.Z, publish the digest records,
     update and merge the stable application manifest in epilykos-os, and build the stable OS image, with no further manual
     step. A failing check at any step stops the release there.'
+  - 'Stable OS images are published as GitHub Releases of epilykos-os: the SD card image (.zst) and a Raspberry
+    Pi Imager OS list (the newest release''s list is at releases/latest/download/epilykos-os-imager.json). Test builds from
+    dev and other branches are CI artifacts only, kept 14 days.'
   evidence:
   - Digest-record artifacts from the application build workflows (main and dev)
   - Manifest provenance check output for each stable release
@@ -966,6 +972,11 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.6.1-draft
+  changes:
+  - 'C-HW-001: one image per board (Pi 4 and Pi 5 later, not yet built), not one image for all boards.'
+  - 'C-RELEASE-001: stable images are hosted as GitHub Releases with the .zst image and a Raspberry Pi Imager OS list; test builds
+    stay 14-day CI artifacts.'
 - version: 0.6.0-draft
   changes:
   - 'C-HOST-001: application updates from Epilykos settings (update_status, update_check, update_apply); C-UPDATE-002

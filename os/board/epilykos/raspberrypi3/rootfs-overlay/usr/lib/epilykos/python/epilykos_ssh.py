@@ -74,9 +74,22 @@ def set_enabled(on, ssh_dir=None):
 
 # -- password -------------------------------------------------------------------
 
+# The image's libxcrypt is built without the glibc-compatible API, so it is
+# only libcrypt.so.2; find_library() finds nothing there (no ldconfig cache
+# or compiler). Distributions ship libcrypt.so.1.
+LIBCRYPT_NAMES = ('libcrypt.so.2', 'libcrypt.so.1')
+
+
 def _libcrypt():
-    name = ctypes.util.find_library('crypt') or 'libcrypt.so.1'
-    lib = ctypes.CDLL(name)
+    names = [n for n in (ctypes.util.find_library('crypt'),) if n] + list(LIBCRYPT_NAMES)
+    for name in names:
+        try:
+            lib = ctypes.CDLL(name)
+            break
+        except OSError:
+            continue
+    else:
+        raise OSError(f'no libcrypt ({", ".join(LIBCRYPT_NAMES)})')
     lib.crypt_ra.restype = ctypes.c_char_p
     lib.crypt_ra.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p),
                              ctypes.POINTER(ctypes.c_int)]

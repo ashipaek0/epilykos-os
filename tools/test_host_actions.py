@@ -51,6 +51,35 @@ expect(ssh.SshError, ssh.validate_hash, '$1$md5$weak')
 expect(ssh.SshError, ssh.validate_hash, 'plaintext')
 ok('password: sha512crypt that crypt(3) verifies; short passwords and weak or plain hashes refused')
 
+# On the image libxcrypt is only libcrypt.so.2 and find_library() finds
+# nothing (Pi 3B, 2026-10-17: "libcrypt.so.1: cannot open shared object file").
+import ctypes.util  # noqa: E402
+real_cdll, real_find, tried = ctypes.CDLL, ctypes.util.find_library, []
+
+
+def image_cdll(name, *a, **kw):
+    tried.append(name)
+    if name != 'libcrypt.so.2':
+        raise OSError(f'{name}: cannot open shared object file: No such file or directory')
+    return real_cdll(real_find('crypt') or 'libcrypt.so.1', *a, **kw)
+
+
+ctypes.CDLL, ctypes.util.find_library = image_cdll, lambda name: None
+try:
+    assert ssh.hash_password(SECRET).startswith('$6$') and tried == ['libcrypt.so.2']
+    tried.clear()
+
+
+    def no_cdll(name, *a, **kw):
+        tried.append(name)
+        raise OSError(f'{name}: cannot open shared object file')
+    ctypes.CDLL = no_cdll
+    expect(OSError, ssh.hash_password, SECRET)
+    assert tried == ['libcrypt.so.2', 'libcrypt.so.1']
+finally:
+    ctypes.CDLL, ctypes.util.find_library = real_cdll, real_find
+ok('password: libcrypt.so.2 is used when that is all the image has')
+
 t, blob, comment = ssh.parse_key(KEY)
 assert (t, comment) == ('ssh-ed25519', 'fola@laptop')
 assert ssh.fingerprint(blob) == 'SHA256:' + subprocess.run(

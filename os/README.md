@@ -86,10 +86,11 @@ Any one of these works; Ethernet needs no setup at all.
    drive on your computer, copy `wifi-example.txt` to `wifi.txt`, and
    fill in `ssid=`, `password=` and `country=` (two-letter code, e.g. `NG`).
 2. **Raspberry Pi Imager's settings.** Imager only offers its Wi-Fi
-   settings for images from an OS list, not for "Use custom".
-   `tools/imager_os_list.py` writes that list for a published image; open
-   Imager with `rpi-imager --repo <list file or URL>`, pick EpilykosOS,
-   and fill in Wi-Fi under "Customise". A classic `wpa_supplicant.conf`
+   settings for images from an OS list, not for "Use custom". Every
+   release carries one (`tools/imager_os_list.py`); the newest is at
+   `https://github.com/ashipaek0/epilykos-os/releases/latest/download/epilykos-os-imager.json`.
+   Open Imager with `rpi-imager --repo <that URL>`, pick EpilykosOS, and
+   fill in Wi-Fi under "Customise". A classic `wpa_supplicant.conf`
    dropped on BOOT works too.
 3. **From a phone over Bluetooth.** With the box powered and not yet on
    a network, open <https://www.improv-wifi.com> in Chrome (Android,

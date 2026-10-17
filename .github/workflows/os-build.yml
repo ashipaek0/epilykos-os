@@ -378,7 +378,14 @@ jobs:
   # A new version of main, or a release you created: put the SD card image on
   # its GitHub Release, only once the image built and booted under QEMU, so a
   # failed build never uses up a number. Releases made with GITHUB_TOKEN do
-  # not start this workflow again.
+  # not start this workflow again. Test builds (dev, branches) stay CI
+  # artifacts only, kept 14 days.
+  #
+  # Each release carries the image (.zst, the build's own output: Raspberry
+  # Pi Imager 1.7+ and balenaEtcher read it) and an Imager OS list, so
+  # Imager can offer EpilykosOS with its Wi-Fi settings. The list of the
+  # newest release always has the same address:
+  #   https://github.com/<owner>/<repo>/releases/latest/download/epilykos-os-imager.json
   release:
     needs: [build, qemu-smoke-test]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.qemu-smoke-test.result == 'success' && (needs.build.outputs.is_new == 'true' || github.event_name == 'release') }}
@@ -386,6 +393,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7   # tools/imager_os_list.py
+      - name: Install zstd
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zstd
       - uses: actions/download-artifact@v4
         with:
           name: epilykos-${{ env.BOARD }}-sdcard
@@ -396,10 +406,17 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          file="epilykos-os-v${VERSION}-${BOARD}.img.zst"
-          mv artifact/sdcard.img.zst "$file"
+          set -e
+          base="epilykos-os-v${VERSION}-${BOARD}.img"
+          mv artifact/sdcard.img.zst "$base.zst"
+          # Unpacked only to measure it: Imager checks the written size and SHA-256.
+          zstd -d -q "$base.zst" -o "$base"
+          python3 tools/imager_os_list.py --image "$base" --download "$base.zst" \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${base}.zst" \
+            --name "EpilykosOS ${VERSION} (Raspberry Pi 3B)" > epilykos-os-imager.json
           if [ "$GITHUB_EVENT_NAME" != release ]; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "EpilykosOS $VERSION" --generate-notes --latest
           fi
-          gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" "$base.zst" epilykos-os-imager.json \
+            --repo "$GITHUB_REPOSITORY" --clobber

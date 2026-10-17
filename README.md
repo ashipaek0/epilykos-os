@@ -11,6 +11,8 @@ EpilykosOS turns a Raspberry Pi into an [Epilykos](https://github.com/ashipaek0/
 ## Getting started
 
 **Setup with no terminal**
+- Download the image from the [Releases](https://github.com/ashipaek0/epilykos-os/releases) page and flash it with Raspberry Pi Imager or balenaEtcher.
+- To let Raspberry Pi Imager set up your Wi-Fi, add EpilykosOS to its list with `https://github.com/ashipaek0/epilykos-os/releases/latest/download/epilykos-os-imager.json`.
 - Plug in Ethernet, or give it your Wi-Fi from your phone over Bluetooth, add wifi credentials via Raspberry Pi Imager's settings, or with a small wifi.txt file in the boot partition of the SD card.
 - Then open `http://epilykos.local:3000` in a browser.
 - The site time zone is set during setup, so daily totals and forecasts follow local time.

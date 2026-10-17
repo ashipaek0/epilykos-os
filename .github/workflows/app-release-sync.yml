@@ -28,6 +28,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pyyaml==6.0.2
+      - name: Source verifier self-tests
+        run: python3 tools/test_verify_app_release.py
       - name: Authenticate source build
         id: source
         env:

@@ -107,7 +107,12 @@ done
 
 # Podman's image ID is the digest of the image config; deriving it here
 # lets the service start exactly this image with no tag lookup.
-IMAGE_ID=$(skopeo inspect --config --raw "oci-archive:${ARCHIVE}" | sha256sum | cut -d' ' -f1)
+CONFIG_FILE=$(mktemp)
+trap 'rm -f "${CONFIG_FILE}"' EXIT HUP INT TERM
+skopeo inspect --config --raw "oci-archive:${ARCHIVE}" > "${CONFIG_FILE}"
+IMAGE_ID=$(python3 "${REPO_DIR}/tools/check_app_compatibility.py" "${CONFIG_FILE}")
+rm -f "${CONFIG_FILE}"
+trap - EXIT HUP INT TERM
 case "${IMAGE_ID}" in
 	[0-9a-f]*) ;;
 	*) echo "post-build: could not derive the image ID" >&2; exit 1 ;;

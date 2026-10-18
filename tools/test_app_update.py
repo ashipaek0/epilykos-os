@@ -55,14 +55,29 @@ state = T / 'updater'
 calls = T / 'calls'
 restart_rc = T / 'restart_rc'   # one exit code per line, consumed in order
 
+running = {'Config': {'Labels': {'io.epilykos.maintenance-lock': 'flock-v1'},
+                      'Env': ['EPILYKOS_MAINTENANCE_LOCK=/app/data/.maintenance.lock']},
+           'State': {'Running': True},
+           'Mounts': [{'Type': 'bind', 'Source': '/data/epilykos/app-data', 'Destination': '/app/data', 'RW': True}]}
+(T / 'running.json').write_text(json.dumps([running]))
+for digest, image_id in ID_FOR.items():
+    (T / (image_id[0] + '.json')).write_text(json.dumps([{'Id': image_id, 'Architecture': 'arm64', 'Os': 'linux',
+        'Config': {'Labels': {'io.epilykos.maintenance-lock': 'flock-v1'}}}]))
+(T / 'incompatible.json').write_text(json.dumps([{'Id': 'd' * 64, 'Architecture': 'arm64', 'Os': 'linux', 'Config': {}}]))
+
 (T / 'podman').write_text(f'''#!/bin/sh
 echo "podman $*" >> {calls}
 case "$1" in
+  container) cat {T}/running.json; exit 0 ;;
   pull) if flock -n {T}/maintenance.lock -c true; then echo "maintenance lock missing" >&2; exit 125; fi
         [ -f {T}/pull_fails ] && {{ echo "Error: initializing source: manifest unknown" >&2; exit 125; }}; exit 0 ;;
   image) case "$2" in
-    inspect) case "$5" in
-      *{DIG1}) echo {ID_FOR[DIG1]} ;; *{DIG2}) echo {ID_FOR[DIG2]} ;; *{DIG3}) echo {ID_FOR[DIG3]} ;; esac ;;
+    inspect) if [ "$#" -eq 3 ]; then
+        if [ -f {T}/bad_candidate ]; then cat {T}/incompatible.json; exit 0; fi
+        case "$3" in *{DIG1}) cat {T}/1.json ;; *{DIG2}) cat {T}/2.json ;; *{DIG3}) cat {T}/3.json ;; esac
+      else
+        case "$5" in *{DIG1}) echo {ID_FOR[DIG1]} ;; *{DIG2}) echo {ID_FOR[DIG2]} ;; *{DIG3}) echo {ID_FOR[DIG3]} ;; esac
+      fi ;;
     exists) exit 0 ;;
   esac ;;
 esac
@@ -152,6 +167,32 @@ with open(T / 'maintenance.lock', 'a+') as held:
     assert not (state / 'job.json').exists()
     assert not calls.read_text(), 'refused update must not pull or restart'
 ok('apply: shared app maintenance refuses an update before allocating or restarting')
+# The running app must use the cooperating protocol on the same DATA mount.
+for broken in [dict(running, Config={}), dict(running, State={'Running': False}),
+               dict(running, Mounts=[]), dict(running, Config={'Labels': running['Config']['Labels'], 'Env': []})]:
+    (T / 'running.json').write_text(json.dumps([broken]))
+    calls.write_text('')
+    try:
+        up.apply('app')
+    except up.UpdateError as e:
+        assert 'maintenance' in str(e).lower(), e
+    else:
+        raise AssertionError('update started with an uncoordinated running app')
+    assert not (state / 'job.json').exists()
+    assert not any('pull' in line or 'restart' in line for line in calls.read_text().splitlines())
+(T / 'running.json').write_text(json.dumps([running]))
+ok('apply: incompatible/misconfigured running app refused before pull/job creation')
+
+(T / 'bad_candidate').write_text('')
+calls.write_text('')
+up.apply('app'); wait_idle()
+assert read('result.json')['ok'] is False and 'maintenance' in read('result.json')['error'].lower()
+assert up.current()['image_id'] == BASE_ID
+assert not any('restart' in line for line in calls.read_text().splitlines())
+(T / 'bad_candidate').unlink()
+ok('apply: candidate without shared maintenance is never activated')
+
+calls.write_text('')
 r = up.apply('app')
 assert r == {'ok': True, 'state': 'applying', 'message': 'Downloading the update'}, r
 wait_idle()

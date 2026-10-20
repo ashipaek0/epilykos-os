@@ -2,64 +2,43 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.6.2-draft  
-**Architecture baseline:** *EpilykosOS: Appliance Architecture — v0.5*  
-**Hardware:** Tier 1 (tested) Raspberry Pi 3 Model B · Tier 2 (best effort) Raspberry Pi 4, Raspberry Pi 5 — see §0  
-**Scope:** Track 2 (EpilykosOS appliance) only. Track 1 (ordinary Docker Compose deployment) remains outside this contract.
+**Version:** 0.7.0-draft
+**Architecture baseline:** EpilykosOS Appliance Architecture v0.5, superseded where the 2026-10-17 v1 decision review specifies otherwise.
+**Hardware:** Pi 3 Model B reference target; Pi 4 then Pi 5 later best-effort targets.
+**Scope:** Track 2 appliance only. Ordinary Docker Compose deployment remains a separate product.
 
-> This document converts the v0.5 narrative architecture into implementation contracts and acceptance gates. A contract marked **decision-required** or **blocked-on-spike** is deliberately not silently completed: CI must treat it as unresolved until the named decision/evidence exists.
->
-> Sections 2, 3, 4 and 7 are generated from `epilykos-os-contracts.yaml` (the machine-readable source of truth) by `tools/render_contracts.py`; `make contracts` fails if this document is stale.
+> The YAML registry is normative. Approval defines a requirement; it does not prove implementation or hardware acceptance. Sections 2, 3, 4 and 7 are generated from `epilykos-os-contracts.yaml`; `make contracts` rejects stale rendering. The approved scope and implementation sequence are recorded under `plans/decisions/` and `plans/pending/`.
 
 ## 0. Repositories, branches and releases
 
-Track 1 and Track 2 are separate products (`I-001`) and live in separate repositories:
+| Repository | Responsibility |
+|---|---|
+| `ashipaek0/Epilykos` | Application source and OCI images; Bluetooth operates inside the application container. |
+| `ashipaek0/epilykos-os` | OS images, host services, boot/recovery, RAUC, image manifests, signing and appliance release automation. |
 
-| Repository | Holds | Consumes |
-|---|---|---|
-| `ashipaek0/epilykos` | The Epilykos application and its OCI image (`epilykos`; Bluetooth runs inside it — the former `epilykos-bms` sidecar is retired). Appliance-facing application changes land here as small pull requests into `dev`. | — |
-| `epilykos-os` | This contract, the OS image build, RAUC configuration, Quadlets, provisioning, and CI (`make contracts`). | Application images **by digest only**, via application manifests. |
+Both use `dev` for integration and `main` for stable releases. The maintainer's existing merge decision authorizes a release; there is no additional routine manual image approval. Implementation PRs target `dev`; agents do not infer permission to merge or publish stable from permission to prepare a PR.
 
-Both repositories use the same branch model:
+Application builds publish immutable digest records with source commit/ref. The release bridge authenticates the successful source build, updates a channel-specific manifest-only PR against the corresponding `dev` or `main` branch, validates it and merges that generated update. It then dispatches signing and, for stable, the OS build. The application source merge remains the maintainer's release decision. The full OS workflow must be present on `main` before its stable dispatch can work.
 
-- **`dev`** — integration branch. Builds from `dev` may be used by developer images and the explicitly labelled `dev` channel only.
-- **`main`** — stable releases only, updated by merging `dev` after review. Stable appliance releases reference only application images built from `main` (`I-009`, `C-RELEASE-001`).
+Stable artifacts use `main` source and stable application provenance. Reliable automated build, artifact, configuration, signature and provenance failures block publication. QEMU is diagnostic until calibrated against known-good and deliberately broken images; it neither substitutes for Pi firmware nor proves physical boot recovery. Initial Pi 3B acceptance and targeted revalidation of changed boot/storage/recovery mechanisms remain required, without manually testing each routine image.
 
-Every application image build publishes a digest record (`service, image, digest, tag, commit, ref, version`). Stable manifests are assembled from `main` records; tags such as `latest` and `dev` are only ever used to discover a build, never to pin one.
+OS publication is separate from appliance installation. OS installation is manual through authenticated Install and reboot; automatic checks and USB insertion do not authorize installation. Application automatic installation remains opt-in, using signed release authorization. Offline packages can be installed through authenticated upload or USB without Internet.
 
-**How the repositories stay in step.** The OS repository never tracks application source, only released images:
+### Hardware support
 
-1. A push to the application's `dev` or `main` builds the images and records their digests.
-2. The build then sends an `app-image-published` event to this repository with those records.
-3. `app-release-sync.yml` validates the records, stores them under `release/digest-records/`, writes the next `manifests/dev.yaml` or `manifests/stable.yaml` (sequence + 1), runs `make contracts`, and opens or updates the pull request `app-sync/dev` or `app-sync/stable` against `dev`.
-4. A maintainer checks and merges that pull request. **That merge is the trust decision for the release** (`C-UPDATE-004`); nothing reaches an appliance automatically. A stable OS release then carries the stable manifest from `dev` to `main`.
+Pi 3B (1 GB, microSD) is implemented first. Pi 4 then Pi 5 use separately pinned upstream board support, images, compatible identities and independent validation. They do not block Pi 3B v1. A failed board artifact is withheld; an untested image is labeled hardware-unverified. Logical A/B plus persistent DATA semantics are shared, but Pi 3B physical layout, MBR choice and boot-chain implementation are not assumed portable.
 
-In the other direction, when the OS needs an application change, §9 lists it, it lands in the application repository as a pull request into `dev`, and the contract cites the commit.
+## 1. Terms and evidence states
 
-### Hardware support tiers
+MUST is required, SHOULD needs a documented exception, and MAY is optional. Contract states mean:
 
-| Tier | Boards | What it means |
-|---|---|---|
-| **1 — tested** | Raspberry Pi 3 Model B (1 GB) | The maintainer's board. Every release-gating hardware test runs here; all evidence in §10 comes from it. |
-| **2 — best effort** | Raspberry Pi 4, Raspberry Pi 5 | Images are built in CI from the same source. Board support (kernel, firmware, bootloader, device trees) comes only from a maintained upstream project pinned to a reviewed revision. Untested unless community evidence exists, and release notes say so. |
+- `draft`: approved requirements, incomplete implementation or evidence.
+- `decision-required`: a concrete decision remains open.
+- `blocked-on-spike`: an implementation claim depends on feasibility evidence.
+- `deferred-v1`: explicitly outside v1.
+- `passed`: all required evidence exists and has been reviewed.
 
-Because of this (`C-HW-001`, `I-010`):
-- Features that only exist on Tier 2 hardware (USB gadget provisioning, the Pi 5 RTC, NVMe boot) are optional and never gate a stage.
-- The Tier 1 design constraints are 1 GB RAM (`C-RESOURCE-001`), a microSD boot medium (`C-BOOT-001`, `C-DATA-003`), no RTC (`C-TIME-001`), and Bluetooth sharing the main UART (`C-RUNTIME-003`).
-
-## 1. Normative language and contract states
-
-**MUST** is release-blocking for the referenced stage. **SHOULD** requires an explicit documented exception if not followed. **MAY** is optional.
-
-Contract states:
-
-- `draft` — requirement is sufficiently defined to implement and test, but has not yet produced passing evidence.
-- `decision-required` — a concrete value/scope decision remains open.
-- `blocked-on-spike` — implementation depends on hardware evidence.
-- `deferred-v1` — intentionally out of the v1 critical path.
-- `passed` — all required evidence exists and has been reviewed.
-
-CI validates that every contract required by a stage is either `passed` or explicitly excluded by that stage's policy; unresolved contracts must never be interpreted as passing.
+Contract validation is not a boot test and does not automatically turn a green build into a passed hardware contract. Missing physical evidence must remain pending. Normal application health, degraded DATA recovery and independent both-slots-failed recovery are distinct states.
 
 ## 2. Frozen invariants
 
@@ -74,26 +53,30 @@ CI validates that every contract required by a stage is either `passed` or expli
 | `I-007` | Neither update plane may activate a candidate solely on unauthenticated metadata: OS bundles and application manifests both require an explicit trust decision before activation. | RAUC signature-rejection tests plus application-manifest trust/rejection tests. |
 | `I-008` | Externally supplied application manifests are replay-protected by a monotonic release sequence stored on DATA; internal previous-known-good rollback remains independently available. | Application-manifest replay rejection plus internal rollback tests. |
 | `I-009` | Stable appliance releases reference only application images built from the Epilykos main branch; images built from dev are limited to developer images and the explicitly labelled dev channel. | Manifest provenance check: every digest in a stable manifest matches a digest record whose ref is main. |
-| `I-010` | Release-gating hardware evidence comes from a Tier 1 board. Tier 2 boards use only board support (kernel, firmware, bootloader, device trees) taken from a maintained upstream project, and are never described as tested without Tier 2 hardware evidence. | Evidence files name the board; release notes state the support level per board; Tier 2 board-support sources are pinned upstream references. |
+| `I-010` | Initial Pi 3B platform/recovery evidence and targeted revalidation come from Tier 1. Ordinary stable publication is automated without per-image manual approval. Later Tier 2 support is pinned upstream and never described as hardware-tested without evidence. | Evidence files name the board; release notes state the support level per board; Tier 2 board-support sources are pinned upstream references. |
 
 ## 3. Contracts
 
 ### C-HW-001 — Hardware support tiers
 
-**Stage:** 0  
+**Stage:** 0
+
 **Status:** `draft`
 
 *Why:* The maintainer can only test on a Raspberry Pi 3B. Tier 2 support therefore relies on code other projects already run on those boards, rather than untested Epilykos-specific low-level work.
 
 **Requirements**
 
-- Tier 1 is the Raspberry Pi 3 Model B (1 GB). Every hardware test that gates a stage MUST pass on Tier 1.
-- Tier 2 (Raspberry Pi 4, Raspberry Pi 5) is best effort. Tier 2 images MUST build in CI from the same source, with the same partition topology and update mechanisms as Tier 1.
-- Tier 2 board support MUST come from a maintained upstream project (for example the per-board configuration of Home Assistant OS, Buildroot or meta-raspberrypi), pinned to a reviewed revision. Epilykos-specific patches to Tier 2 board support MUST be documented and SHOULD be avoided.
-- Release notes MUST state, per board, whether that release has hardware evidence. A Tier 2 board without evidence MUST be labelled untested.
-- Community hardware evidence for Tier 2 is accepted in the standard evidence format with the tester and board revision recorded; it never blocks a release.
-- A feature that exists only on Tier 2 hardware (USB gadget provisioning, onboard RTC, NVMe boot) MUST be optional and MUST NOT be required by any stage gate.
-- Each supported board gets its own image, built from the shared tree with board-specific kernel, firmware and boot configuration, and its own RAUC compatible string, so one board's update cannot install on another. Tier 2 images are not built until Tier 2 work starts.
+- Pi 3 Model B (1 GB) is the v1 reference board. Initial platform/recovery evidence and targeted revalidation of changed mechanisms MUST use it; routine images MUST NOT require manual testing or approval.
+- Complete Pi 3B first, then add Pi 4 and Pi 5 as non-blocking best-effort targets. Each board MUST have its own pinned upstream support, image, automated validation and RAUC compatible identity.
+- Share logical A/B rollback and persistent DATA semantics; select physical boot layout and recovery from maintained upstream support per board. Pi 3B MBR and bootloader details MUST NOT be assumed applicable to every board.
+- A failed board build MUST prevent publication of its artifact without suppressing a valid Pi 3B artifact. Pi 4/5 MUST NOT delay Pi 3B v1.
+- Release notes MUST identify hardware-tested board revisions and label hardware-unverified best-effort images honestly. Community evidence is accepted; it is not a manual gate for every later image.
+- Tier 2-only capabilities MUST remain optional. Pi 4/5 images MUST NOT be offered before their board configuration and automated validation exist.
+
+**Implementation status**
+
+- Only the Pi 3B board configuration exists. Pi 4/5 work and initial complete Pi 3B acceptance remain pending.
 
 **Required evidence**
 
@@ -103,7 +86,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-BOOT-000 — Boot-chain and build-system feasibility spike
 
-**Stage:** 0  
+**Stage:** 0
+
 **Status:** `blocked-on-spike`
 
 *Why:* Proving the boot chain first, on the hardware that will produce all gating evidence, avoids discovering boot problems at Stage 4.
@@ -128,25 +112,26 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-BOOT-001 — Partition map
 
-**Stage:** 0  
+**Stage:** 0
+
 **Status:** `draft`
 
 **Requirements**
 
-- Both developer and appliance images MUST use GPT and the same ordered partition topology.
+- Pi 3B developer and appliance images MUST use MBR with the same ordered BOOT, ROOT-A, ROOT-B and DATA topology. Pi 4/5 layout is selected separately with their upstream board support.
 - Required labels are BOOT, ROOT-A, ROOT-B, DATA.
-- RECOVERY is conditional and MUST NOT be added until D-RECOVERY-001 is resolved.
+- An independent recovery environment is required in v1; its storage location MUST be designed with the protected boot chain. No fifth partition, size change or deployed-card migration is pre-approved.
 - ROOT-A and ROOT-B MUST be equal size.
 - Sizes and filesystems are frozen by D-STORAGE-001: BOOT 128 MiB FAT32, ROOT-A and ROOT-B 1536 MiB ext4 each, DATA ext4 filling the rest of a card of at least 32 GB.
 - DATA MUST be a separate persistent filesystem and MUST survive OS slot switches and application rollbacks.
 - The Tier 1 v1 boot medium is the microSD card: USB mass-storage boot on the original Pi 3B requires a one-time OTP setting and MUST NOT be assumed. Tier 2 boards MAY use USB or NVMe media supported by their upstream board support.
-- ROOT-A and ROOT-B MUST be mounted read-only in normal operation, so cutting power cannot damage the OS. Only DATA, the redundant U-Boot environment and, for the moment a provisioning file is removed, BOOT are ever written.
+- ROOT-A and ROOT-B MUST remain mounted read-only in normal operation. Controlled host update/repair operations may write an inactive slot or approved boot artifacts; DATA remains the normal persistent writable state.
 - DATA MUST be checked and repaired automatically at boot (fsck -p semantics); a DATA check failure MUST NOT stop the box from booting to a state where the dashboard reports the problem.
 
 **Implementation status**
 
-- Tier 1 image (os/, 0.5.3-draft): four primary MBR partitions — BOOT (FAT32), ROOT-A and ROOT-B (equal size), DATA — with a fixed disk signature (0x45504c4b) so every partition has a stable PARTUUID. Filesystem labels BOOT, ROOT-A, ROOT-B, DATA.
-- Deviation, not yet resolved: the requirement says GPT. The Pi 3B boot ROM only reads an MBR, so GPT on Tier 1 means a hybrid MBR and a first-boot grow that preserves it. Plain MBR is used until that is decided; sizes remain placeholders (D-STORAGE-001).
+- Current image uses four primary MBR partitions and fixed disk signature 0x45504c4b. MBR is now approved for Pi 3B; there is no outstanding GPT exception.
+- Current sizes remain BOOT 128 MiB, each ROOT 1536 MiB, DATA filling the remaining card. Recovery/boot-chain storage feasibility and safe adoption are pending; these sizes MUST NOT silently be changed.
 
 **Required evidence**
 
@@ -157,7 +142,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-BOOT-002 — U-Boot / RAUC bootchooser variables
 
-**Stage:** 4  
+**Stage:** 4
+
 **Status:** `draft`
 
 **Requirements**
@@ -167,12 +153,14 @@ CI validates that every contract required by a stage is either `passed` or expli
 - RAUC in userspace MUST be the only normal runtime component that mutates slot-good/bad state.
 - boot-attempts and boot-attempts-primary MUST be explicit configuration values; defaults are not acceptable.
 - Loss or corruption of the U-Boot environment MUST have a documented deterministic recovery behavior.
+- The Linux kernel, Linux DTB, modules and rootfs MUST form one update/rollback unit in each ROOT slot; U-Boot MUST load the selected slot artifacts rather than a shared BOOT Linux image.
 
 **Implementation status**
 
 - U-Boot 2025.10 (rpi_3, AArch64) runs boot.scr, which follows RAUC's reference U-Boot script: BOOT_ORDER, BOOT_A_LEFT, BOOT_B_LEFT, root=PARTUUID and rauc.slot= on the kernel command line.
-- Environment storage (proposal for D-BOOT-001): raw on the SD card in two redundant 16 KiB copies at 4 MiB and 4 MiB + 16 KiB, ahead of the first partition; /etc/fw_env.config gives fw_setenv (RAUC) the same locations. A blank or corrupt environment falls back to U-Boot defaults and boot.cmd re-initialises A B / 3 / 3.
-- RAUC system.conf sets boot-attempts=3 and boot-attempts-primary=3 explicitly (proposed values; D-BOOT-001 still open).
+- Environment storage (D-BOOT-001): raw on the SD card in two redundant 16 KiB copies at 4 MiB and 4 MiB + 16 KiB, ahead of the first partition; /etc/fw_env.config gives fw_setenv (RAUC) the same locations. A blank or corrupt environment falls back to U-Boot defaults and boot.cmd re-initialises A B / 3 / 3.
+- RAUC system.conf sets boot-attempts=3 and boot-attempts-primary=3 explicitly (locked values).
+- Linux Image/DTB currently remain on shared BOOT; moving them into each slot and enabling/verifying ext4 loading is required and not yet implemented.
 
 **Unresolved before this contract can pass**
 
@@ -189,24 +177,21 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-BOOT-003 — Mark-good conditions
 
-**Stage:** 4  
+**Stage:** 4
+
 **Status:** `draft`
 
 **Requirements**
 
-- A new OS slot MUST be marked good only after multi-user userspace is reached, required filesystems are mounted, Podman is operational, and the Epilykos container is healthy.
-- Network link, Internet reachability, BLE availability, inverter availability, and full SQLite integrity checks MUST NOT gate mark-good.
-- A lightweight database open/schema operation MAY be part of the Epilykos container health check only to demonstrate application startup.
-- Failure to satisfy boot health within the configured timeout MUST leave the slot unconfirmed; U-Boot attempt accounting then determines rollback.
-- The application health signal used for mark-good MUST be the /healthz contract in C-RUNTIME-002.
+- Normal slot confirmation MUST require local userspace, mounted DATA, operational Podman and a healthy Epilykos application using the /healthz contract.
+- Use one 20-minute deadline from Linux userspace startup, including image import and required startup database checks/migrations. Do not add a second deadline after application startup.
+- On timeout or a hang, automatic reboot/reset MUST advance the three-attempt candidate policy and select the previous known-good slot; watchdog coverage MUST be demonstrated.
+- Internet, network link, Bluetooth and inverter availability MUST NOT gate confirmation. Periodic expensive integrity diagnostics remain separate from health.
+- Recovery availability MUST NOT mark the ordinary application slot healthy. Shared DATA failure and both exhausted slots MUST route to their approved recovery states instead of endless retries.
 
 **Implementation status**
 
-- epilykos-mark-good.service runs after multi-user.target and calls rauc status mark-good only when /data is mounted, podman info succeeds and the epilykos container reports healthy (/healthz). Network, Bluetooth and inverters are not checked. Timeout 1200 s (proposed); on timeout the slot stays unconfirmed.
-
-**Unresolved before this contract can pass**
-
-- Exact health-gate timeout
+- Current mark-good script waits up to 1200 seconds after epilykos.service, leaves failure unconfirmed and does not reboot. The whole-userspace deadline, autonomous reset/watchdog and recovery routing remain pending.
 
 **Required evidence**
 
@@ -217,7 +202,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-DATA-001 — Persistent DATA paths
 
-**Stage:** 0  
+**Stage:** 0
+
 **Status:** `draft`
 
 **Requirements**
@@ -236,7 +222,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-DATA-002 — Container storage paths
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
@@ -253,7 +240,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-DATA-003 — SQLite durability configuration
 
-**Stage:** 4  
+**Stage:** 4
+
 **Status:** `draft`
 
 **Requirements**
@@ -266,9 +254,9 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Periodic integrity diagnostics MUST be separate from boot-health gating.
 - The Quadlet MUST set SQLITE_SYNCHRONOUS explicitly to the value frozen by D-SQLITE-001; the application refuses OFF and reports the effective journal and synchronous mode in /healthz.
 - Telemetry samples are buffered for at most METRIC_FLUSH_INTERVAL_MS (5 s) before commit. The power-cut acceptance criterion MUST define acceptable telemetry loss as no more than this window plus the synchronous-mode window; configuration and settings writes are never buffered and MUST survive.
-- Daily snapshots and backup/restore stage full database copies on DATA; DATA free space MUST remain at least twice the database size plus the retained snapshots (see D-STORAGE-001).
 - Power-cut testing MUST run on the Tier 1 board with the recommended microSD card class. Documentation MUST recommend a high-endurance card and state the expected write volume per day so wear can be estimated.
 - The appliance sets SQLITE_SYNCHRONOUS=FULL (D-SQLITE-001). PRAGMA quick_check MUST run after every unclean shutdown and weekly; its result is reported in the dashboard and diagnostics, never used as a boot-health condition.
+- Maintenance MUST use C-STORAGE-001 operation-specific peak-allocation checks; existing retained snapshots are already counted in used space and MUST NOT be double-counted as additional free-space demand.
 
 **Implementation status**
 
@@ -284,7 +272,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-RUNTIME-001 — Podman host contract
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
@@ -297,8 +286,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 **Implementation status**
 
-- Interim deviation: the Tier 1 image runs Podman rootful (crun, cgroup v2, overlay storage on /data/containers/storage) and the container itself runs the app as uid 1000, not as a host root process. Rootless operation under the epilykos service account waits on D-RUNTIME-001 (UID/GID and subuid ranges) and the Stage 3 D-Bus spike.
-- The pinned Epilykos image (linux/arm64) is preloaded in the rootfs as an OCI archive and loaded into storage on first boot without network.
+- The image uses the approved rootful Podman service with crun/cgroup v2 and DATA-backed storage; the application runs as uid/gid 1000. Rootless/subuid work is outside v1.
+- The build preloads the pinned arm64 OCI archive and starts it without a registry dependency. Full hardware acceptance remains outstanding.
 
 **Required evidence**
 
@@ -306,33 +295,31 @@ CI validates that every contract required by a stage is either `passed` or expli
 - podman info
 - Offline boot test
 
-### C-RUNTIME-002 — Epilykos Quadlet
+### C-RUNTIME-002 — Epilykos container service
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
 
-- The production Quadlet MUST reference an immutable image digest supplied by the active application manifest.
-- The container MUST run as the epilykos service user or mapped rootless user, not as a privileged host process.
+- The production container service (Quadlet or equivalent systemd launcher) MUST reference an immutable image digest supplied by the active application manifest.
+- The host uses approved rootful Podman; the application MUST run as uid/gid 1000 inside a non-privileged container.
 - Persistent /app/data MUST map to DATA.
 - Application logs in appliance mode MUST go to stdout/stderr; the existing Winston file transport MUST be disabled or not configured.
-- The container SHOULD use a read-only root filesystem once Stage 2 proves no required writes occur outside mapped persistent/temporary paths.
 - Podman health MUST use a dedicated unauthenticated local health endpoint containing no secrets.
 - Notify=healthy (or equivalent Quadlet readiness behavior) MUST gate systemd readiness.
 - The Podman HealthCmd MUST call GET /healthz, which returns 200 only when the app serves HTTP and SQLite opens with the expected schema, and 503 otherwise; it MUST NOT depend on network, Internet, BLE or inverter availability.
 - The health start period MUST allow first-boot migrations on a large database (SHOULD be at least 60 s; exact value frozen with C-BOOT-003 timeout).
-- The Quadlet MUST set LOG_TO_FILE=false so the application never creates or writes a log directory.
-- The container /tmp MUST be a tmpfs, with TMPDIR pointing at it; uploads (backup restore, layout import) are staged there, so its size cap MUST be at least the 50 MB upload limit.
+- The container service MUST set LOG_TO_FILE=false so the application never creates or writes a log directory.
 - All persistent application state lives under /app/data (energy.db with -wal/-shm, snapshots/, session-secret, settings-password), which MUST be the single DATA bind mount.
+- The appliance container root filesystem MUST be read-only in v1 after validating required write paths. Persistent state belongs on DATA and temporary writes on explicitly bounded scratch mounts; no silent read-write fallback is permitted.
+- Small temporary work MAY use bounded RAM-backed /tmp. Production-size backup/restore/update uploads MUST stream to private DATA staging with storage admission and expansion limits.
+- Host-controlled BOOT-file password reset, DATA password/session updates, large restore and verified image replacement MUST remain supported and be tested with the read-only container.
 
 **Implementation status**
 
-- GET /healthz added (unauthenticated, no secrets; reports version, time zone and SQLite durability) — app commit fabfa89.
-- LOG_TO_FILE=false disables the file transport and the log-directory creation that would crash on a read-only root — app commit fabfa89.
-- Uploads use TMPDIR (os.tmpdir()) instead of a hard-coded /tmp — app commit fabfa89.
-- Read-only container root still requires the Stage 2 write audit before the SHOULD becomes enforceable.
-- Buildroot's Podman 5.7 is built without the Quadlet generator, so the image ships epilykos.service plus a launcher script (epilykos-run) with the options a Quadlet would render: image by build-time image ID derived from the manifest digest, LOG_TO_FILE=false, SQLITE_SYNCHRONOUS=FULL, /app/data from /data/epilykos/app-data, tmpfs /tmp with TMPDIR, --sdnotify=healthy, health check on /healthz with a 180 s start period. make contracts checks the launcher.
+- The image uses an equivalent tested systemd launcher because the bundled Podman does not ship the Quadlet generator. Host root is read-only; container root enforcement and the large-upload write-path changes remain pending.
 
 **Required evidence**
 
@@ -343,7 +330,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-RUNTIME-003 — Bluetooth access for the Epilykos container
 
-**Stage:** 3  
+**Stage:** 3
+
 **Status:** `blocked-on-spike`
 
 **Requirements**
@@ -351,13 +339,13 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Bluetooth (BMS and inverter BLE modules) MUST be served by the Epilykos container talking to host BlueZ over the system D-Bus; no separate Bluetooth container and no BlueZ inside the container.
 - privileged=true MUST NOT appear in the production appliance configuration without an approved exception.
 - Capability/device access MUST be determined by the ordered Stage 3 spike, not guessed in advance.
-- Test order (on the Tier 1 board): rootless + host BlueZ/D-Bus with no extra capabilities; narrow D-Bus policy; rootful-but-unprivileged; direct HCI capabilities only if necessary.
 - The final D-Bus policy and device/capability set MUST be committed as code and regression-tested.
+- The v1 spike MUST verify approved rootful Podman with the application as uid 1000, host BlueZ/D-Bus and no privileged mode or additional capabilities. Rootless experimentation is not a v1 prerequisite.
 
 **Current baseline**
 
 - Track 1 now runs Bluetooth inside the epilykos container (application dev branch; the bms-bridge sidecar is retired). The container runs as uid 1000 on a bridge network with only /run/dbus bind-mounted read-only; bleak talks to host BlueZ over D-Bus. No host networking, no privileged mode, no BlueZ in the image.
-- That is already the first step of the test order above; the Stage 3 spike confirms it on the Tier 1 board under rootless Podman (subuid mapping versus the host BlueZ D-Bus policy) and records the D-Bus policy it needs.
+- That is already the first step of the test order above; the Stage 3 spike confirms it on the Tier 1 board under the approved rootful Podman launcher and host D-Bus policy and records the D-Bus policy it needs.
 - The OS image ships host BlueZ (bluez5_utils); bringing up the Pi 3B onboard radio (firmware, UART attach) is part of the spike.
 - On the Tier 1 Pi 3B the onboard Bluetooth uses the PL011 UART; serial inverters and BMS on that board SHOULD use USB serial adapters so BLE and serial do not compete for the UART.
 
@@ -374,7 +362,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-RESOURCE-001 — Memory and storage budget on Tier 1
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
@@ -394,7 +383,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-RELEASE-001 — Release channels and image provenance
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
@@ -408,12 +398,17 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Mutable tags (latest, dev) MAY be used to discover a build but MUST be resolved to a recorded digest before any manifest or image preload references it.
 - Merging dev into main in the application repository is the release: CI MUST then tag vX.Y.Z, publish the digest records, update and merge the stable application manifest in epilykos-os, and build the stable OS image, with no further manual step. A failing check at any step stops the release there.
 - Stable OS images are published as GitHub Releases of epilykos-os: the SD card image (.zst) and a Raspberry Pi Imager OS list (the newest release's list is at releases/latest/download/epilykos-os-imager.json). Test builds from dev and other branches are CI artifacts only, kept 14 days.
+- After the existing maintainer merge authorization, reliable automated build, artifact, configuration, signature and provenance checks MUST govern automatic publication. No additional routine per-image manual approval is permitted.
+- The current QEMU Pi boot checks MUST remain explicitly diagnostic until calibrated against known-good and deliberately broken images. Emulator limitations MUST NOT be represented as real-board failures or hardware evidence.
+- Initial Pi 3B platform/recovery acceptance and a 72-hour production-size soak are required; repeat targeted hardware tests for relevant boot/storage/recovery changes rather than manually approving every ordinary image.
+- Missing artifacts, failed required checks and invalid provenance MUST block publication across dispatch/push/release/app-bridge/retry paths. Publish verified build artifacts rather than an untested rebuild.
 
 **Implementation status**
 
 - Application repo: build workflows record the pushed multi-arch digest, commit and ref as an artifact and step summary (app commit fabfa89).
 - OS repo: make contracts enforces provenance for every manifest in manifests/ against release/digest-records/.
 - Bridge: after each image build the application repository sends an app-image-published repository_dispatch carrying the digest records; .github/workflows/app-release-sync.yml applies them with tools/sync_app_release.py (strict payload validation), authenticates the source branch and successful build artifact, runs make contracts, then merges a manifest-only PR into dev or main respectively. The maintainer's source merge is the release decision (D-RELEASE-001); signing and stable image build are explicitly dispatched after the token-authored merge.
+- The full OS build workflow is on dev but not main at the reviewed baseline. Publication gates and current QEMU result handling still need alignment with this policy.
 
 **Required evidence**
 
@@ -423,7 +418,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-UPDATE-001 — OS update trust model
 
-**Stage:** 5  
+**Stage:** 5
+
 **Status:** `draft`
 
 **Requirements**
@@ -433,7 +429,14 @@ CI validates that every contract required by a stage is either `passed` or expli
 - Secure-boot keys MUST be a separate hierarchy from RAUC bundle-signing keys.
 - Appliance images MUST trust the release RAUC CA; developer images MAY additionally trust a development CA according to documented policy.
 - The private release signing key MUST NOT be embedded in images or repositories.
-- Installation of an invalid, unsigned, or untrusted bundle MUST fail before writing an update slot.
+- Invalid signatures, unsigned bundles and untrusted signers MUST be rejected before writing an update slot. Corrupt streamed payload content MUST prevent successful activation.
+- RAUC public trust anchors MUST be embedded in each OS slot. Production images trust only the release CA; developer trust policy MUST be explicit, with no dashboard verification bypass.
+- Keep CA private keys offline with a protected recoverable backup and a separate protected CI release signer. App-manifest, RAUC and future secure-boot keys MUST remain separate.
+- Online, upload and USB installation MUST apply identical authenticity and board checks. Test offline certificate-time handling, validity/rotation and recovery trust without silently disabling validation.
+
+**Implementation status**
+
+- No RAUC keyring, signed OS bundle publication or OS install API is implemented yet; installation is intentionally refused. Signing/trust policy is approved, not proven.
 
 **Required evidence**
 
@@ -444,7 +447,8 @@ CI validates that every contract required by a stage is either `passed` or expli
 
 ### C-UPDATE-002 — Application update manifest
 
-**Stage:** 5  
+**Stage:** 5
+
 **Status:** `draft`
 
 **Requirements**
@@ -487,7 +491,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-UPDATE-003 — Independent rollback behavior
 
-**Stage:** 5  
+**Stage:** 5
+
 **Status:** `draft`
 
 **Requirements**
@@ -504,36 +509,29 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-UPDATE-004 — Application manifest delivery and trust
 
-**Stage:** 5  
+**Stage:** 5
+
 **Status:** `draft`
 
 **Requirements**
 
 - The appliance MUST NOT accept an application candidate merely because its OCI images are digest-pinned; the manifest authorizing those digests MUST itself arrive through an authenticated or explicitly user-approved trust path.
-- Supported delivery paths MUST mirror the local-first OS-update model: USB/removable media, authenticated local upload/push, and an optional user-specified URL.
-- The trust model for non-interactive manifest acceptance MUST be frozen before Stage 5 closes. Acceptable design families are: a cryptographically signed manifest verified against a pinned application-release trust anchor; or a pinned/verified source where every candidate requires explicit authenticated user approval. CI MUST NOT silently choose between these models.
+- Supported delivery paths MUST mirror the local-first OS-update model: USB/removable media, authenticated local upload/push, and official online releases; custom update-server URLs are deferred from v1.
 - Transport security alone MUST NOT be treated as equivalent to release authorization unless the contract explicitly freezes that model and its pinning/approval semantics.
 - An untrusted, unsigned, incorrectly signed, substituted, or otherwise unauthorized manifest MUST be rejected before any candidate OCI image is activated.
 - Manifest verification MUST occur before C-UPDATE-002 candidate promotion logic begins.
-- If application-manifest signing is selected, its trust anchor SHOULD be separate from the RAUC release CA so the two update planes remain independently revocable.
 - Every externally supplied application manifest MUST carry a monotonically increasing integer release sequence in addition to the human-readable release/version string.
 - The manifest trust decision MUST cover the release sequence together with the image digests; the sequence MUST NOT be accepted from unsigned/unapproved metadata beside an otherwise trusted manifest.
-- The appliance MUST persist the highest promoted release sequence on DATA and MUST reject externally supplied manifests whose sequence is less than or equal to that floor as stale/replayed, unless an explicit authenticated downgrade procedure is invoked.
+- The appliance MUST persist the highest promoted release sequence on DATA and MUST reject externally supplied manifests whose sequence is less than or equal to that floor as stale/replayed, with no external application downgrade override in v1.
 - Automatic rollback to the internally retained previous-known-good manifest is not treated as accepting an old external manifest and MUST remain possible without lowering the stored release-sequence floor.
 - A failed candidate that is never promoted MUST NOT advance the stored highest promoted release sequence.
 - Frozen model (D-UPDATE-001): Ed25519-signed manifests verified against a public key pinned in the OS image, with a key separate from the RAUC release CA. Delivery paths: online check against the GitHub release, dashboard upload, USB stick.
-
-**Unresolved before this contract can pass**
-
-- D-UPDATE-001: freeze application-manifest authenticity model and trust-anchor/source policy
-- Whether user-specified URL delivery is in v1 or remains Stage 6 nice-to-have
-- Whether v1 exposes an explicit authenticated operator downgrade override; default external-manifest behavior remains reject-on-sequence-replay.
+- Application manifests MUST use the existing Ed25519-signed model with a pinned key separate from the RAUC CA. Complete offline packages MUST satisfy C-UPDATE-006; a signed manifest alone is not a self-contained update.
 
 **Required evidence**
 
 - USB manifest delivery test
 - Authenticated local upload/push test
-- User-specified URL test if that path is enabled
 - Tampered/substituted manifest rejection test
 - Wrong-signer or untrusted-source rejection test
 - Audit record showing source, trust result, release identifier, and selected digests without leaking secrets
@@ -543,7 +541,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-NET-001 — Offline-boot invariant
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
@@ -560,7 +559,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-PROV-001 — Ethernet provisioning
 
-**Stage:** 1  
+**Stage:** 1
+
 **Status:** `draft`
 
 **Requirements**
@@ -579,7 +579,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-PROV-002 — Wi-Fi provisioning without a network
 
-**Stage:** 1  
+**Stage:** 1
+
 **Status:** `draft`
 
 **Requirements**
@@ -591,9 +592,9 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 **Implementation status**
 
 - Wi-Fi without a terminal, three ways: (1) wifi.txt on the BOOT partition (template wifi-example.txt ships there); (2) Raspberry Pi Imager settings, via an OS list (tools/imager_os_list.py) declaring init_format systemd, imported from firstrun.sh / network-config / rpi-preseed.toml without running them; (3) Bluetooth LE using the open Improv Wi-Fi protocol (epilykos-improv), usable from a Web Bluetooth browser or Home Assistant.
-- Deviation from the letter of this contract: there is no Wi-Fi access point or captive portal; Bluetooth setup takes its place. It is offered whenever no network address is held, and for 30 minutes after boot while no Wi-Fi is configured. Re-entry by physical gesture is not implemented (D-PROV-001 open), so anyone in Bluetooth range can offer Wi-Fi while the box is offline.
 - Secrets: imported BOOT files are deleted after import; credentials are stored only in iwd network files (0600) on DATA; no setup path logs a password (covered by tools/test_wifi_provisioning.py and tools/test_improv_dbus.py).
-- The Bluetooth controller runs Low Energy only (BlueZ ControllerMode = le) and is not pairable: setup needs no pairing, and a laptop that had paired over classic Bluetooth no longer found the Improv service (Pi 3B, 2026-10-17).
+- Improv BLE replaces the old captive-portal proposal. Authenticated Change Wi-Fi opens a bounded window; automatic no-address reopening follows D-PROV-001 and is covered by host/Improv tests.
+- BlueZ remains LE-only. Improv setup itself needs no pairing; the host now provides a separate bounded pairing agent/window for BMS/inverter devices, including PIN/passkey confirmation and persistent bonds.
 
 **Required evidence**
 
@@ -603,7 +604,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-PROV-003 — USB Ethernet gadget provisioning
 
-**Stage:** 1  
+**Stage:** 1
+
 **Status:** `deferred-v1`
 
 **Requirements**
@@ -622,24 +624,31 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-RECOVERY-001 — Slot exhaustion behavior
 
-**Stage:** 5  
+**Stage:** 5
+
 **Status:** `draft`
 
 **Requirements**
 
-- Behavior when both ROOT-A and ROOT-B are unbootable MUST be deterministic and tested.
-- If a RECOVERY boot target is retained, U-Boot MUST select it; the normal initramfs MUST NOT own slot-selection policy.
-- If RECOVERY is deferred from v1, the v1 manual recovery procedure MUST be documented and tested before release.
-- v1 has no RECOVERY target (D-RECOVERY-001). The documented manual procedure is: reflash the card and restore a dashboard backup in the setup wizard; the dashboard MUST make downloading a backup easy and SHOULD remind the user to keep one.
+- When both ROOT slots are unusable or exhaust their bounded attempts, the bootloader MUST automatically enter a minimal independent recovery environment instead of resetting attempt counters indefinitely.
+- Recovery MUST boot without either normal rootfs, DATA or Podman. Provide authenticated diagnostics and signed, board-compatible OS repair through local upload and USB with no mandatory Internet.
+- Entry is automatic; repair/reinstallation requires explicit authorization. Preserve DATA, reject invalid packages and retain the recovery path across power loss.
+- The recovery payload location, protected bootstrap boundary and DATA-independent per-device credential lifecycle MUST be designed and proven on Pi 3B; no extra partition or silent migration is assumed.
+- A Linux recovery target does not replace automatic early boot-chain recovery, and cannot promise recovery from physical loss of the entire card.
+
+**Implementation status**
+
+- Current boot.cmd resets both counters after exhaustion. The independent recovery image, authorization and repair paths are required in v1 but are not implemented.
 
 **Required evidence**
 
-- Both-slots-bad hardware test
-- Recovery/reflash runbook validation
+- Both-slots-bad real Pi 3B automatic recovery-entry test
+- Authenticated offline signed repair, DATA preservation and interrupted-repair recovery evidence
 
 ### C-ACCESS-001 — SSH maintenance access
 
-**Stage:** 4  
+**Stage:** 4
+
 **Status:** `draft`
 
 **Requirements**
@@ -661,7 +670,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-TIME-001 — Clock and synchronization
 
-**Stage:** 1  
+**Stage:** 1
+
 **Status:** `draft`
 
 **Requirements**
@@ -690,7 +700,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-LOG-001 — Logging and diagnostics
 
-**Stage:** 4  
+**Stage:** 4
+
 **Status:** `draft`
 
 **Requirements**
@@ -700,10 +711,14 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - Diagnostics export MUST include journal, container status, RAUC status, boot-slot metadata, kernel version, hardware enumeration, redacted network state, application version/digests, and database status.
 - Diagnostics export MUST redact credentials, tokens, private keys, Wi-Fi PSKs, and application secrets.
 - The persistent journal cap is 64 MB (D-LOG-001).
+- Provide authenticated local Download diagnostics in normal and DATA-independent recovery UI. Never transmit automatically to a third party.
+- Collectors MUST have bounded time/output, return partial results with explicit omissions and exclude raw database/backups and unrestricted environment/configuration dumps.
+- Redact structured fields and logs, including token-bearing URLs, Wi-Fi secrets, pairing PINs/bonds and session secrets. Export existing DB check outcomes without starting an expensive full scan.
 
 **Implementation status**
 
 - Application: LOG_TO_FILE=false gives stdout/stderr only; ANSI colours only on a TTY; per-request HTTP logs are below the default level — app commit fabfa89.
+- Persistent journal cap and app logs exist; bounded redacted host/recovery export remains pending.
 
 **Required evidence**
 
@@ -714,7 +729,8 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-HOST-001 — Dashboard system actions
 
-**Stage:** 2  
+**Stage:** 2
+
 **Status:** `draft`
 
 **Requirements**
@@ -736,190 +752,280 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 
 ### C-SECUREBOOT-001 — Optional verified-boot chain
 
-**Stage:** 6  
+**Stage:** 6
+
 **Status:** `deferred-v1`
 
 **Requirements**
 
-- No v1 documentation may claim full secure boot merely because Pi OTP verifies U-Boot.
-- If implemented, the chain MUST cover Pi ROM/EEPROM trust → verified U-Boot → U-Boot-verified kernel/DTB/initramfs.
-- Root filesystem integrity, if required, MUST be treated as a separate design problem such as dm-verity.
-- Secure boot remains optional and MUST NOT be required for RAUC bundle authenticity.
+- Hardware-anchored secure/verified boot and cryptographic rootfs integrity enforcement (for example dm-verity) remain deferred from v1.
+- Signed update packages, read-only operation and automatic boot-chain recovery remain required. Read-only mounts do not provide cryptographic integrity or protection against direct card modification.
+- No v1 documentation may claim full secure boot or infer later-board hardware trust capabilities on Pi 3B. Any later implementation requires board-specific trust, rotation, anti-rollback and recovery design with tamper negative tests.
 
 **Required evidence**
 
 - Verified-boot negative test with tampered kernel/DTB/initramfs
+
+### C-BOOT-004 — Dedicated early boot-chain updater
+
+**Stage:** 5
+
+**Status:** `draft`
+
+**Requirements**
+
+- v1 MUST include a dedicated authenticated updater for the approved Raspberry Pi early firmware/U-Boot/shared boot configuration domain, separate from ordinary per-slot Linux updates.
+- Recover automatically from interrupted writes/activation/confirmation and corrupt, valid-but-nonbooting or hanging candidate loaders without manual power cycling, SD removal or another computer.
+- An earlier protected component MUST select/reset to known-good boot artifacts; atomic writes alone are not bad-code recovery. Define the earliest protected boundary and compatibility with both Linux slots and independent recovery.
+- Power-cut and bad-loader tests on real Pi 3B MUST demonstrate the mechanism before it is claimed usable. If a required component cannot safely update under the selected boundary, report the measured limitation without silently relaxing recovery.
+
+**Implementation status**
+
+- Approved v1 requirement; implementation and acceptance evidence remain pending.
+
+**Required evidence**
+
+- Automated positive/negative tests and identified Pi 3B hardware cases; missing evidence is pending, not a pass.
+
+### C-STORAGE-001 — Free-space warnings and maintenance admission
+
+**Stage:** 4
+
+**Status:** `draft`
+
+**Requirements**
+
+- Warn below max(20% of DATA capacity, 2 GiB); optional maintenance MUST leave max(10% of DATA capacity, 1 GiB) remaining at projected peak use.
+- Use actual space available to the service and account for additional upload/decompression/scratch/WAL/migration/OCI/rollback allocations. Do not assume compression saves space or count existing snapshots twice.
+- Enforce concurrency budgets, upload/expansion limits and transition rechecks; handle ENOSPC safely. Keep normal-growth monitoring because admission headroom is not a hard reservation against future telemetry writes.
+- Refuse with required/available space rather than deleting live data, retained snapshots or active/known-good images. Clean only identified orphaned files no longer owned or needed for crash recovery.
+- Keep 32 GB minimum and 64 GB recommended; never promise all production-size operations fit on 32 GB. Recovery controls must remain usable in a low-space state.
+
+**Implementation status**
+
+- Approved v1 requirement; implementation and acceptance evidence remain pending.
+
+**Required evidence**
+
+- Automated positive/negative tests and identified Pi 3B hardware cases; missing evidence is pending, not a pass.
+
+### C-DATA-004 — Production-size backup and recoverable restore
+
+**Stage:** 4
+
+**Status:** `draft`
+
+**Requirements**
+
+- Backup/download and restore/upload MUST support multi-gigabyte databases including the approximately 5.9 GB production case with bounded memory and private DATA staging, not the 50 MiB/RAM temporary path.
+- Create consistent SQLite backups accounting for WAL; validate integrity, required schema and migration compatibility before replacement. Long work MUST NOT block the dashboard event loop.
+- Serialize conflicting maintenance, quiesce all DB users for replacement and use durable restore state with coherent WAL/SHM handling. Keep the original until restored migrations/checks and app health succeed.
+- After an interrupted upload, process death or power cut, recover to a complete validated database or retained original, never a partial copy or unrelated sidecars. Show progress and warn before monitoring pauses.
+
+**Implementation status**
+
+- Approved v1 requirement; implementation and acceptance evidence remain pending.
+
+**Required evidence**
+
+- Automated positive/negative tests and identified Pi 3B hardware cases; missing evidence is pending, not a pass.
+
+### C-DATA-005 — Compressed daily snapshots
+
+**Stage:** 4
+
+**Status:** `draft`
+
+**Requirements**
+
+- Create one due daily snapshot and retain the two newest successfully completed snapshots using bounded background streaming gzip. Preserve legacy plain DB backup/restore support.
+- Publish a verified durable replacement before pruning; failed/incomplete files MUST NOT consume retention slots or remove the last known-good snapshots.
+- After downtime, coalesce missed days into one job after health/maintenance availability. Bound concurrent work and retries, handle clock steps and warn on overdue/failed/space-skipped snapshots.
+- Apply decompression/peak-space limits and never delete retained snapshots to make temporary space. Same-card snapshots do not replace external backup reminders.
+
+**Implementation status**
+
+- Approved v1 requirement; implementation and acceptance evidence remain pending.
+
+**Required evidence**
+
+- Automated positive/negative tests and identified Pi 3B hardware cases; missing evidence is pending, not a pass.
+
+### C-UPDATE-005 — OS delivery and manual install controls
+
+**Stage:** 5
+
+**Status:** `draft`
+
+**Requirements**
+
+- Support official online delivery, authenticated local upload and USB import with identical verification and storage checks. Custom URLs are outside v1.
+- OS installation is manual in v1: show the release, preflight and expected monitoring outage before authenticated Install and reboot. Optional automatic checks do not authorize installation.
+- Install into an inactive slot, shut down/reboot cleanly, and report confirmation/rollback after reconnect. USB insertion or a disconnected browser MUST NOT trigger or duplicate unauthorized activation.
+- Serialize conflicting app/OS update and restore actions; preserve active slot, DATA and known-good assets. Signed package, board/boot-chain compatibility and complete candidate verification are required.
+
+**Implementation status**
+
+- Approved v1 requirement; implementation and acceptance evidence remain pending.
+
+**Required evidence**
+
+- Automated positive/negative tests and identified Pi 3B hardware cases; missing evidence is pending, not a pass.
+
+### C-UPDATE-006 — Complete offline application packages
+
+**Stage:** 5
+
+**Status:** `draft`
+
+**Requirements**
+
+- Release platform-specific offline packages containing signed release authorization and all required OCI content so installation needs no registry/DNS/Internet access.
+- Bind archive hashes/sizes and platform image graph to signed authorization, correctly relating multiarch index and included manifest/config/layers. A tag or successful podman load alone is insufficient proof.
+- Support authenticated upload and USB import followed by explicit installation approval, bounded staging and safe archive parsing; do not run package hooks.
+- Apply the same signer/channel/sequence policy and app health/known-good rollback as online installation, without OS slot switching or normal host reboot. Preserve replay state and verify DB compatibility through image rollback.
+
+**Implementation status**
+
+- Approved v1 requirement; implementation and acceptance evidence remain pending.
+
+**Required evidence**
+
+- Automated positive/negative tests and identified Pi 3B hardware cases; missing evidence is pending, not a pass.
 
 ## 4. Acceptance matrix
 
 | Test ID | Stage | Assertion |
 |---|---:|---|
 | `T-BOOT-000` | 0 | On the Tier 1 Pi 3B with a microSD card, the selected boot chain boots both slots, falls back after a forced failure and boots with no network. |
-| `T-HW-001` | 1 | Every Tier 2 image builds in CI from the same source as Tier 1 with identical partition topology, and its board support is pinned to a recorded upstream revision. |
+| `T-HW-001` | 1 | Each added Tier 2 board has pinned upstream support, logical A/B/DATA semantics and independent build/compatibility checks; a failed board artifact is withheld without blocking a valid Pi 3B artifact. |
 | `T-PROV-001` | 1 | Fresh image is provisionable over Ethernet without terminal access. |
-| `T-PROV-002` | 1 | Fresh image is provisionable through temporary Wi-Fi AP/captive portal. |
-| `T-PROV-003` | 1 | Tier 2 best effort, non-gating: a Pi 4/5 image is provisionable over USB Ethernet gadget. |
+| `T-PROV-002` | 1 | Wi-Fi setup works through BOOT/Imager files and Improv BLE without a captive portal; authenticated and no-address re-entry follow D-PROV-001. |
 | `T-TIME-001` | 1 | On the Tier 1 Pi 3B, a cold boot with no network restores a clock not earlier than the last shutdown and reports it unsynchronised until NTP succeeds. |
 | `T-RELEASE-001` | 2 | A stable manifest containing a digest whose record ref is dev (or with no record) fails the provenance check; an appliance image rejects a channel: dev manifest. |
 | `T-RESOURCE-001` | 2 | A 72-hour soak on the Tier 1 Pi 3B with active polling stays within the D-RESOURCE-001 budget with no host OOM kill; a forced application leak restarts only the container. |
 | `T-RUNTIME-001` | 2 | Cold boot with all networking unavailable starts Epilykos from preloaded OCI images. |
 | `T-RUNTIME-002` | 2 | Epilykos container health failure prevents systemd readiness/RAUC confirmation. |
-| `T-RUNTIME-003` | 2 | With a read-only container root, LOG_TO_FILE=false and a tmpfs /tmp, Epilykos starts, /healthz returns 200, and a backup restore upload succeeds. |
+| `T-RUNTIME-003` | 2 | Read-only container root permits approved DATA/bounded-scratch writes, normal startup/polling/password reset and production-size backup/restore/import/update flows without silent writable fallback. |
 | `T-BLE-001` | 3 | The Epilykos container reads a Bluetooth BMS and a BLE inverter module on test hardware without privileged=true, or an approved exception exists. |
-| `T-ACCESS-001` | 4 | Fresh appliance has SSH disabled; authenticated dashboard enablement generates the appliance keypair, permits key-only non-root login, rejects password/root login, and does not leak private-key material. |
-| `T-BOOT-001` | 4 | Developer and appliance images expose identical partition labels/order and boot through U-Boot. |
+| `T-ACCESS-001` | 4 | SSH is off by default, accepts configured password/public keys only for non-root epilykos when enabled, rejects root login and exposes no secrets. |
+| `T-BOOT-001` | 4 | Pi 3B developer/appliance images retain the approved MBR topology; each selected Linux slot supplies its matching kernel, DTB, modules and rootfs. |
 | `T-BOOT-003` | 4 | No network link does not prevent mark-good when host/application boot health is otherwise satisfied. |
 | `T-BOOT-004` | 4 | Corrupt or remove the U-Boot bootchooser environment and verify the documented deterministic recovery behavior without silently booting an arbitrary slot. |
+| `T-BOOT-006` | 4 | The single 20-minute userspace deadline covers startup and advances three candidate attempts via automatic reset/watchdog, followed by known-good fallback without network requirements. |
 | `T-DATA-001` | 4 | Database/settings written on one slot remain unchanged after booting the other slot. |
 | `T-DATA-002` | 4 | Repeated abrupt power cuts during writes do not produce unacceptable corruption on the selected v1 storage hardware. |
 | `T-DATA-003` | 4 | After an abrupt power cut during active polling, telemetry loss is within METRIC_FLUSH_INTERVAL_MS plus the synchronous-mode window and no configuration change is lost. |
+| `T-DATA-004` | 4 | Production-size restore survives termination/power loss at each transition, restores a complete usable DB or its retained original and handles WAL/schema/migrations correctly. |
+| `T-DATA-005` | 4 | Compressed/legacy snapshots restore correctly; failed publication/pruning, disk exhaustion, clock changes and missed days preserve two successful copies and bounded operation. |
+| `T-DATA-006` | 4 | Unusable DATA still permits authenticated recovery diagnostics; no automatic formatting, database deletion or endless slot loop occurs. |
 | `T-LOG-001` | 4 | Diagnostics bundle contains required evidence and no configured secrets. |
+| `T-LOG-002` | 4 | Seeded secrets in structured status and logs never appear in bounded diagnostics; missing DATA/container/journal and hung collectors yield authorized partial output. |
+| `T-STORAGE-001` | 4 | Warning/admission boundaries, growth/concurrency, incompressible input, expansion and ENOSPC preserve headroom/data/rollback assets with clear safe refusal. |
 | `T-BOOT-002` | 5 | A deliberately broken candidate OS exhausts attempts and returns to the previous good slot. |
-| `T-RECOVERY-001` | 5 | Both-slots-bad behavior matches the resolved recovery contract. |
+| `T-BOOT-005` | 5 | Physical power cuts and corrupt/hanging candidate bootloaders trigger automatic known-good early-chain recovery with no operator reset; Linux-only mocks do not count. |
+| `T-RECOVERY-001` | 5 | Both failed Linux slots enter independent authenticated recovery automatically; offline signed repair preserves DATA and remains recoverable after interruption. |
+| `T-RELEASE-002` | 5 | Deliberate required-check/artifact/provenance failures suppress publication across every trigger; known emulator limitations remain diagnostic and routine publication has no manual approval gate. |
 | `T-UPDATE-001` | 5 | Official signed RAUC bundle installs; invalid and wrong-CA bundles are rejected. |
 | `T-UPDATE-002` | 5 | Broken application candidate rolls back to previous digest without switching OS slot. |
 | `T-UPDATE-003` | 5 | OS rollback preserves DATA and active application-update state according to C-UPDATE-003. |
 | `T-UPDATE-004` | 5 | A substituted/tampered or unauthorized application manifest is rejected before candidate OCI activation; a trusted/approved manifest proceeds to C-UPDATE-002 health/promotion logic. |
 | `T-UPDATE-005` | 5 | After promoting application sequence N, re-present a previously trusted/approved manifest with sequence <= N and verify rejection before OCI activation; then verify internal previous-known-good rollback still works without lowering the stored floor. |
+| `T-UPDATE-006` | 5 | Signed OS installs from online/upload/USB work offline where applicable and reject wrong signer/board, tampering, incomplete content and incompatible boot-chain candidates. |
+| `T-UPDATE-007` | 5 | Complete app packages install with networking blocked; wrong content/platform/channel/replayed sequence and interrupted import/failed health do not authorize invalid promotion. |
+| `T-PROV-003` | 6 | USB gadget setup is deferred from v1; test a supported board/port/host matrix only if separately approved later. |
 
-### Test-fixture reuse
+### Fixture reuse
 
-`C-NET-001`, `C-DATA-002`, `T-RUNTIME-001` and `T-RUNTIME-003` deliberately overlap around an offline cold boot. They verify different properties — absence of network dependency, persistence of OCI storage across slots, successful runtime startup, and a read-only container root — but CI SHOULD use one shared network-isolated boot fixture and record separate assertions/evidence instead of creating unrelated test rigs.
+Reuse common offline-boot fixtures for network independence, persistent OCI storage and read-only operation, recording each assertion separately. Use a disposable production-size database copy for large maintenance tests. Mock termination is not physical power-cut evidence. Negative tests must demonstrate that deliberately broken inputs fail the relevant check.
 
-## 5. Stage gates
+## 5. Initial acceptance and later regression
 
-A stage is complete only when every test assigned to that stage passes and every contract needed by that stage is no longer `decision-required` or `blocked-on-spike`, except where the roadmap explicitly marks the feature deferred.
-
-| Stage | Gate |
+| Stage | Required initial mechanism evidence |
 |---:|---|
-| 0 | Hardware tiers are recorded (`C-HW-001`); the A/B boot chain and build system are proven on the Tier 1 Pi 3B with a microSD card (`C-BOOT-000`); partition topology, update-domain split, reference hardware and v1 recovery scope are frozen where due; the complete decision backlog is reviewed and every open decision has an explicit due stage. |
-| 1 | Ethernet and Wi-Fi AP provisioning work on Tier 1 from a clean flash without terminal access; provisioning captures the site time zone; the clock survives an offline boot without an RTC; Tier 2 images build in CI. USB gadget provisioning is Tier 2 best effort. |
-| 2 | Rootless Podman host contract is proven; Epilykos starts from preloaded `main`-built images with no network present and with a read-only container root; the whole appliance fits the Tier 1 1 GB memory budget over a 72-hour soak; release channels and digest provenance are enforced. |
-| 3 | Serial/RS232/RS485 and BLE hardware tests pass on Tier 1; the Epilykos container's Bluetooth privilege set is evidence-based and `privileged=true` is absent unless exception-approved. |
-| 4 | Appliance policy is active: read-only root, persistent DATA, logging policy, SSH default-off/key lifecycle, U-Boot/RAUC bootchooser (or the mechanism chosen by `D-BOOT-002`), corrupted-environment recovery, power-cut telemetry-loss bound, and boot-health separation all pass hardware tests. |
-| 5 | Signed RAUC updates and trusted, replay-protected, digest-pinned, stable-channel OCI application updates both pass independent authenticity, success/failure, and rollback tests. |
-| 6 | Optional verified boot and user-specified update URL are implemented only if separately approved. |
+| 0 | Pi 3B MBR/layout and protected boot/recovery feasibility; both Linux slots and forced fallback; no hidden card migration. |
+| 1 | Ethernet, BOOT/Imager-file and Improv BLE Wi-Fi provisioning; bounded re-entry, site timezone, offline clock restoration. USB gadget setup is deferred. |
+| 2 | Approved rootful Podman with application uid/gid 1000; preloaded offline image startup, verified writable paths and read-only container; production-size 72-hour memory/storage/polling soak and correct release provenance. |
+| 3 | Real BLE BMS/inverter and serial connections, pairing/bond lifecycle and Wi-Fi coexistence; no privileged container or unexplained capability expansion. |
+| 4 | Per-slot Linux artifacts, one 20-minute userspace deadline and automatic watchdog/fallback, DATA-independent recovery, SQLite durability, large recoverable backup/restore, compressed snapshots, storage admission, diagnostics and access/password-reset behavior. |
+| 5 | Signed OS/boot-chain and complete offline app installation; rejected tampering/wrong-board/replay; independent rollback with compatible DB state; bad-loader and both-slots recovery; repeated physical cuts through write/activation/confirmation/repair; automatic publication failure gates. |
+| 6 | Explicitly deferred custom URLs, external app downgrade override, USB gadget setup and verified boot require later approval before implementation. |
+
+Initial platform acceptance is followed by automated regressions. Refresh targeted physical evidence when the relevant low-level mechanism changes, using repeatable harnesses and automated physical testing where available. Do not add a per-image manual approval gate. Pi 4/5 best-effort support is non-blocking and separately labeled.
 
 ## 6. Decision governance
 
-The decision registry is **not** ordered by when a decision was introduced. It is ordered by `due_stage`, then decision ID. A decision added in a later contracts revision has exactly the same review and release-gating semantics as one present from the first pass.
+Decisions are ordered by due stage then ID; chronology does not change their force. A stage cannot close with unresolved decisions due at or before it. The 2026-10-17 maintainer review locked 22 scope/policy choices; `D-VREVIEW-001` links the consolidated record. Remaining implementation details include the protected earliest bootstrap boundary, recovery storage/authorization, clock/trust rotation and safe adoption for existing cards. If measured hardware behavior invalidates a locked requirement, report the evidence before changing it.
 
-Stage 0 must review the **entire** open decision backlog and confirm each decision's due stage. Only decisions due at Stage 0 have to be resolved before Stage 0 closes; later-stage decisions remain open but visible. A stage cannot close while an open decision whose `due_stage` is that stage or earlier remains unresolved.
-
-This explicitly applies to decisions introduced after v0.1: `D-ACCESS-001` and `D-UPDATE-001` (v0.2), `D-PLATFORM-001`, `D-BOOT-002` and `D-RELEASE-001` (v0.4), and `D-HW-001` (resolved) and `D-RESOURCE-001` (v0.5).
-
-## 7. Decisions that must not be guessed
+## 7. Recorded decisions
 
 | Decision ID | Due stage | Status | Blocks | Question |
 |---|---:|---|---|---|
-| `D-BOOT-002` | 0 | `resolved` | `C-BOOT-000`, `C-BOOT-002` | Confirm U-Boot + RAUC bootchooser on the Tier 1 Pi 3B from C-BOOT-000 evidence; for Tier 2 boards, record which upstream boot mechanism (U-Boot, or Pi firmware tryboot/autoboot.txt with a RAUC custom backend) is adopted per board. **Resolved:** U-Boot + RAUC bootchooser on the Tier 1 Pi 3B: the 0.5.3 image booted on the maintainer's board through the Pi firmware, U-Boot and boot.scr to multi-user from ROOT-A (2026-10-16). The slot-switch and forced-fallback evidence is still C-BOOT-000's. Tier 2 Pi 4 and Pi 5 use U-Boot as well, following Home Assistant OS. |
-| `D-HW-001` | 0 | `resolved` | `C-HW-001` | Which boards are tested (Tier 1) and which are best effort (Tier 2)? **Resolved:** Tier 1: Raspberry Pi 3 Model B (the only maintainer-owned board). Tier 2 best effort: Raspberry Pi 4 and 5, using proven upstream board support. |
+| `D-BOOT-002` | 0 | `resolved` | `C-BOOT-000`, `C-BOOT-002` | Confirm U-Boot + RAUC bootchooser on the Tier 1 Pi 3B from C-BOOT-000 evidence; for Tier 2 boards, record which upstream boot mechanism (U-Boot, or Pi firmware tryboot/autoboot.txt with a RAUC custom backend) is adopted per board. **Resolved:** U-Boot + RAUC bootchooser on the Tier 1 Pi 3B: the 0.5.3 image booted on the maintainer's board through the Pi firmware, U-Boot and boot.scr to multi-user from ROOT-A (2026-10-16). The slot-switch and forced-fallback evidence is still C-BOOT-000's. Pi 4/5 select pinned upstream board boot/recovery support separately; no Pi 3B mechanism is assumed portable. |
+| `D-HW-001` | 0 | `resolved` | `C-HW-001` | Which boards are tested (Tier 1) and which are best effort (Tier 2)? **Resolved:** Tier 1: Raspberry Pi 3 Model B (the only maintainer-owned board). Tier 2 best effort: Raspberry Pi 4 and 5, using proven upstream board support. Complete Pi 3B first, then Pi 4, then Pi 5; best-effort boards do not block Pi 3B publication and their evidence level must be explicit. |
 | `D-PLATFORM-001` | 0 | `resolved` | `C-BOOT-000` | Choose the OS build system (Yocto or Buildroot). Prefer the option whose upstream already maintains A/B images for Pi 3, 4 and 5 (Home Assistant OS is Buildroot + RAUC on all three), since Tier 2 relies on that board support. **Resolved:** Buildroot, following Home Assistant OS's combination of Buildroot + U-Boot + RAUC across Pi 3/4/5 (not a fork of its tree). Scaffolded as a BR2_EXTERNAL tree under os/; unbuilt and unverified until C-BOOT-000's hardware evidence exists. |
-| `D-RECOVERY-001` | 0 | `resolved` | `C-RECOVERY-001`, `C-BOOT-001` | Include a dedicated recovery boot target in v1 or defer it and freeze a manual recovery procedure. **Resolved:** Deferred from v1: no RECOVERY partition. When both slots run out of attempts, boot.cmd gives both their attempts back (RAUC's reference behaviour). The v1 manual procedure is: keep dashboard backups; if the box no longer boots, reflash the card and restore the backup in the setup wizard. A recovery system may be added in a later version. |
-| `D-STORAGE-001` | 0 | `resolved` | `C-BOOT-001` | Freeze exact BOOT/ROOT-A/ROOT-B/DATA sizes and filesystem types. Inputs: DATA must hold the database (a production install is ~5.9 GB), two retained snapshots, backup/restore staging (2x database) and the capped journal. The Tier 1 medium is a microSD card: include card capacity and endurance class in the decision. **Resolved:** Medium: microSD, 32 GB minimum, 64 GB recommended, A1/A2 high-endurance class recommended. Layout: U-Boot environment raw at 4 MiB (two 16 KiB copies); BOOT 128 MiB FAT32; ROOT-A and ROOT-B 1536 MiB ext4 each, mounted read-only; DATA ext4 from the end of ROOT-B to the end of the card (grown on first boot). Snapshots are stored compressed. On a card below 32 GB the dashboard warns that snapshots and restore space may not fit. |
+| `D-RECOVERY-001` | 0 | `resolved` | `C-RECOVERY-001`, `C-BOOT-001` | Include a dedicated recovery boot target in v1 or defer it and freeze a manual recovery procedure. **Resolved:** Superseded on 2026-10-17: v1 requires independent both-slots-failed recovery plus DATA-independent recovery UI. Automatic entry, authorized offline signed repair, DATA preservation and no endless counter-reset loop. Storage/credential/earliest-bootstrap design and hardware proof remain pending; no new partition or silent migration is approved. |
+| `D-STORAGE-001` | 0 | `resolved` | `C-BOOT-001` | Freeze exact BOOT/ROOT-A/ROOT-B/DATA sizes and filesystem types. Inputs: DATA must hold the database (a production install is ~5.9 GB), two retained snapshots, backup/restore staging (2x database) and the capped journal. The Tier 1 medium is a microSD card: include card capacity and endurance class in the decision. **Resolved:** Medium: microSD, 32 GB minimum, 64 GB recommended, A1/A2 high-endurance class recommended. Layout: U-Boot environment raw at 4 MiB (two 16 KiB copies); BOOT 128 MiB FAT32; ROOT-A and ROOT-B 1536 MiB ext4 each, mounted read-only; DATA ext4 from the end of ROOT-B to the end of the card (grown on first boot). Snapshots are stored compressed. On a card below 32 GB the dashboard warns that snapshots and restore space may not fit. Pi 3B uses MBR. Maintenance warning/headroom and peak budgets follow C-STORAGE-001; do not double-count retained files or promise 32 GB fits every operation. |
 | `D-PROV-001` | 1 | `resolved` | `C-PROV-002`, `C-PROV-003` | Define the physical recovery gesture (must work on the Tier 1 Pi 3B) and, for Tier 2 USB gadget provisioning, the supported host OS matrix. **Resolved:** No physical gesture on Tier 1 (the Pi 3B has no button). Re-entry into Wi-Fi setup is either an authenticated "Change Wi-Fi" action in Epilykos settings, which opens Bluetooth LE setup (Improv) for 15 minutes, or automatic after the box has had no network address for 2 minutes. The Tier 2 USB-gadget host OS matrix is deferred with C-PROV-003. |
 | `D-TIME-001` | 1 | `resolved` | `C-TIME-001` | Choose and configure the NTP implementation/server policy. Also define how clock-sync state and the provisioned time zone reach the application. **Resolved:** systemd-timesyncd; NTP servers from DHCP first, then pool.ntp.org. The last known time is kept on DATA and restored early in boot. The host exposes sync state to the container as a read-only file; the time zone is chosen in the setup wizard and passed to the container as TZ. |
-| `D-RELEASE-001` | 2 | `resolved` | `C-RELEASE-001` | Freeze the release process: who may merge dev to main, version tag format, and how digest records are collected into a stable application manifest. **Resolved:** Only the maintainer (ashipaek0) merges dev into main, in both repositories. Merging dev into main in the application repository is the release and everything after it is automatic: CI tags vX.Y.Z, publishes the digest records, updates and merges the stable application manifest in epilykos-os, and builds the stable OS image. |
+| `D-RELEASE-001` | 2 | `resolved` | `C-RELEASE-001` | Freeze the release process: who may merge dev to main, version tag format, and how digest records are collected into a stable application manifest. **Resolved:** Only the maintainer (ashipaek0) merges dev into main, in both repositories. Merging dev into main in the application repository is the release and everything after it is automatic: CI tags vX.Y.Z, publishes the digest records, updates and merges the stable application manifest in epilykos-os, and builds the stable OS image. Reliable automated gates govern publication; QEMU remains diagnostic until validated. No additional per-image manual hardware approval. Initial acceptance and targeted mechanism revalidation remain required. |
 | `D-RESOURCE-001` | 2 | `resolved` | `C-RESOURCE-001` | Freeze the Tier 1 memory budget: minimum steady-state free memory, Node.js heap cap, container memory limits and zram size. Input: Epilykos 2.7.0 measured ~100 MB peak RSS (92 MB steady) with an empty database on an x86-64 dev machine; re-measure on the Pi 3B with a production-size database and the Bluetooth helper running (it replaces the bms-bridge container). **Resolved:** Epilykos container memory limit 640 MB; Node.js heap cap 384 MB (--max-old-space-size=384); zram swap 256 MB (zstd); no swap on the SD card. Target: at least 100 MB free memory steady-state, to be re-measured on the Pi 3B with a production-size database. |
 | `D-RUNTIME-001` | 2 | `resolved` | `C-RUNTIME-001` | Freeze epilykos UID/GID and subuid/subgid ranges. **Resolved:** Rootful Podman for v1; the application runs as uid/gid 1000 inside the container. No subuid/subgid ranges: rootless operation is dropped from v1. |
 | `D-BLE-001` | 3 | `resolved` | `C-RUNTIME-003` | Run Stage 3 D-Bus/BlueZ spike for the Epilykos container and record minimum privilege set and D-Bus policy. **Resolved:** No privileged container and no added capabilities: the application reaches host BlueZ over the system D-Bus (socket bind-mounted read-only), and a D-Bus policy lets uid 1000 talk to org.bluez only. |
 | `D-ACCESS-001` | 4 | `resolved` | `C-ACCESS-001` | Freeze dashboard-generated SSH key lifecycle: private-key delivery/export, persistent storage if any, rotation, revocation, and disable/re-enable semantics. **Resolved:** SSH is off on a fresh box. An administrator turns it on in Epilykos settings; Raspberry Pi Imager's SSH settings or an authorized_keys file on BOOT turn it on at first boot. Login is user epilykos (sudo) with a password (set in the dashboard or by Imager) and/or public keys (pasted in the dashboard, from Imager, or authorized_keys on BOOT); the appliance does not generate keypairs. Root login stays disabled. Password and keys live on DATA; turning SSH off stops the server and keeps them; the dashboard can remove each key and clear the password. |
-| `D-BOOT-001` | 4 | `resolved` | `C-BOOT-002` | Freeze U-Boot boot-attempt counts and environment storage/redundancy. **Resolved:** 3 boot attempts per slot (RAUC boot-attempts and boot-attempts-primary = 3). U-Boot environment raw on the SD card at 4 MiB and 4 MiB + 16 KiB, two redundant 16 KiB copies, matched by /etc/fw_env.config. |
-| `D-LOG-001` | 4 | `resolved` | `C-LOG-001` | Freeze persistent journal storage cap. **Resolved:** Persistent journal on DATA, capped at 64 MB (SystemMaxUse=64M). |
+| `D-BOOT-001` | 4 | `resolved` | `C-BOOT-002` | Freeze U-Boot boot-attempt counts and environment storage/redundancy. **Resolved:** 3 boot attempts per slot (RAUC boot-attempts and boot-attempts-primary = 3). U-Boot environment raw on the SD card at 4 MiB and 4 MiB + 16 KiB, two redundant 16 KiB copies, matched by /etc/fw_env.config. Approved health deadline: one 20-minute userspace attempt, automatic reboot/watchdog, three candidate attempts then known-good fallback; timeout/physical reset implementation is pending. |
+| `D-LOG-001` | 4 | `resolved` | `C-LOG-001` | Freeze persistent journal storage cap. **Resolved:** Persistent journal on DATA, capped at 64 MB (SystemMaxUse=64M). Add authenticated bounded redacted local diagnostics in normal/recovery mode, excluding raw DB/secrets and automatic third-party transmission. |
 | `D-SQLITE-001` | 4 | `resolved` | `C-DATA-003` | Freeze SQLite synchronous mode and periodic quick_check cadence. Current application default is NORMAL (explicit since app commit fabfa89). **Resolved:** synchronous=FULL on the appliance (SQLITE_SYNCHRONOUS=FULL). PRAGMA quick_check runs after every unclean shutdown and weekly, outside the boot-health gate. |
-| `D-UPDATE-001` | 5 | `resolved` | `C-UPDATE-004` | Freeze the application-manifest authenticity model: signed manifest with pinned application-release trust anchor, or pinned/verified source plus authenticated per-candidate user approval; define v1 delivery paths. **Resolved:** Signed manifests. CI signs each application release manifest with an Ed25519 key held in this repository's secrets (APP_MANIFEST_SIGNING_KEY), after the manifest pull request is merged, so the signature covers exactly what the human trust decision accepted; separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator approves it, or automatically if enabled. Delivery: online check against the GitHub release, dashboard upload, or USB stick. |
+| `D-UPDATE-001` | 5 | `resolved` | `C-UPDATE-004` | Freeze the application-manifest authenticity model: signed manifest with pinned application-release trust anchor, or pinned/verified source plus authenticated per-candidate user approval; define v1 delivery paths. **Resolved:** Signed manifests. CI signs each application release manifest with an Ed25519 key held in this repository's secrets (APP_MANIFEST_SIGNING_KEY), after the manifest pull request is merged, so the signature covers exactly what the human trust decision accepted; separate from the RAUC release CA; appliances pin the public key and install a verified update when the administrator approves it, or automatically if enabled. Delivery: online check against the GitHub release, dashboard upload, or USB stick. Complete signed offline OCI packages are required. Custom server URLs and external application downgrade overrides are deferred from v1; internal rollback remains permitted without lowering the sequence floor. |
+| `D-VREVIEW-001` | 5 | `resolved` | `C-BOOT-004`, `C-STORAGE-001`, `C-DATA-004`, `C-DATA-005`, `C-UPDATE-005`, `C-UPDATE-006` | Record the 2026-10-17 approved v1 scope and explicit deferrals. **Resolved:** All 22 scope/policy choices are approved in plans/decisions/epilykos-os-v1-scope.md. This includes dedicated automatic early-chain recovery, independent recovery, native RAUC trust, manual OS install, large recoverable data maintenance, signed offline OCI packages, diagnostics, read-only container root and automatic reliable-gated publication. Implementation details and physical evidence remain pending; approved requirements do not imply feasibility tests passed. |
 
-## 8. CI contract
+## 8. CI responsibilities
 
-The repository provides a single contract-validation entry point:
+`make contracts` validates registry syntax/IDs/states/decision references, configured releasable-stage decisions, generated-document freshness and the launcher/manifest rules supported by `tools/validate_contracts.py`. `make test` exercises host/validator regressions. Image build/structure, signed package rejection, update state, archive parsing and runtime tests are additional checks in the owning feature workflows; do not claim the static validator already proves those behaviors.
 
-```text
-make contracts
-```
+Reliable automated failures must prevent the affected artifact from being published. Checks must cover, as their features land:
 
-That target MUST fail when:
+- Immutable digests, stable source provenance and authenticated manifest/package content.
+- Rejection of external application sequences at/below the promoted floor, without blocking internal known-good rollback or silently resetting that floor.
+- Default-off SSH with non-root password/public-key access when explicitly configured; root login rejected.
+- Board-specific artifact/compatible identity, logical A/B/DATA, slot-contained Linux and preserved known-good recovery assets.
+- Bounded maintenance allocations, upload/expansion limits, valid restore transactions and no automatic data deletion.
+- Read-only runtime with explicit writable paths; signed online/local/USB installation and redacted bounded diagnostics.
+- Correct handling of missing/failed artifacts and all publication triggers, including retries and the application bridge.
 
-- the machine-readable registry is syntactically invalid;
-- a contract ID, acceptance-test ID, invariant ID or decision ID is duplicated;
-- any decision lacks `due_stage`, `status`, or Stage-0 review visibility, or blocks a contract that does not exist;
-- a contract's `unresolved` list names a decision ID that does not exist;
-- a stage marked releasable still contains an open decision whose `due_stage` is that stage or earlier;
-- the rendered `EPILYKOS-OS-CONTRACTS.md` is out of date with the registry;
-- production Quadlets contain `privileged=true` without an approved exception marker;
-- the Epilykos Quadlet does not set `LOG_TO_FILE=false` and an explicit `SQLITE_SYNCHRONOUS`, or its `HealthCmd` does not call `/healthz`;
-- production application manifests use mutable OCI tags instead of `sha256:` digests, omit `channel`, or have a non-integer / non-positive `sequence`;
-- a `channel: stable` manifest references a digest without a `main` digest record;
-- an application candidate can be activated without satisfying `C-UPDATE-004` manifest trust;
-- an externally supplied application manifest with sequence at or below the stored promoted-release floor can be activated without an explicit authenticated downgrade exception;
-- appliance SSH is enabled by default or permits password/root login;
-- developer and appliance partition topologies diverge, or a Tier 2 image's partition topology diverges from Tier 1;
-- a Tier 2 image fails to build, or its board support is not pinned to a recorded upstream revision;
-- required appliance OCI images are not present in the image manifest/preload set.
+A missing artifact should suppress dependent boot execution and report the real prerequisite failure. Hardware evidence records the board, media, source/artifact identity and measured outcome; an unavailable capability is PENDING or an approved skip, never a fabricated PASS. QEMU limitations remain diagnostic until validated.
 
-Checks whose inputs do not exist yet (Quadlets, manifests, image builds) run as soon as the corresponding directory appears. Hardware-dependent tests MUST emit machine-readable evidence rather than being silently skipped. A permitted skip must name the missing hardware capability and must not count as a pass for a release gate.
+## 9. Application integration
 
-## 9. Application changes required by the contract
+| Area | Reviewed baseline / remaining work |
+|---|---|
+| Health, stdout logging, SQLite mode, timezone | Implemented baseline; preserve local health independence and verify under new maintenance/runtime behavior. |
+| Host clock/card notices, SSH controls, password reset, pairing | Implemented baseline; preserve approved password/key login, BOOT reset and bounded pairing. Independent recovery authorization is still design work. |
+| Online application update | Signed/provenance/replay and opt-in update path exists; full offline OCI packages, archive/content validation and migration-compatible rollback need implementation/evidence. |
+| Backup/restore | Existing small RAM-staged uploads/direct replacement must be replaced by bounded DATA streaming and recoverable multi-GB transactions. |
+| Snapshots/storage | Existing two plain DB copies need gzip, durable publication, admission limits and overdue/failure warnings. |
+| OS install and diagnostics | Host capability/API and authenticated normal/recovery UI remain pending. |
+| Read-only container | Mandatory v1 requirement; audit runtime helpers and writable paths, then enforce and test without silent fallback. |
 
-These land in `ashipaek0/epilykos` as small pull requests into `dev`, and reach appliances only through a stable (`main`) release.
+App changes land through focused PRs into application `dev`, with backward-compatible host capability negotiation. The OS preloads a verified released app image, never uncommitted application source. Do not expose unsupported host operations on older images.
 
-| # | Change | Contract | Status |
-|---:|---|---|---|
-| 1 | Dedicated unauthenticated `GET /healthz` (no secrets; HTTP + SQLite schema only; 503 when unhealthy) and a Docker `HEALTHCHECK` | `C-RUNTIME-002`, `C-BOOT-003` | Done (app commit `fabfa89`) |
-| 2 | `LOG_TO_FILE=false` → stdout/stderr only, no log directory created (required for a read-only root) | `C-RUNTIME-002`, `C-LOG-001` | Done (`fabfa89`) |
-| 3 | Explicit `SQLITE_SYNCHRONOUS` (OFF refused) and named `METRIC_FLUSH_INTERVAL_MS` loss window, both reported by `/healthz` | `C-DATA-003` | Done (`fabfa89`) |
-| 4 | Uploads staged in `TMPDIR` rather than a hard-coded `/tmp` | `C-RUNTIME-002` | Done (`fabfa89`) |
-| 5 | Build workflows publish digest records (digest, commit, ref) for every pushed image | `C-RELEASE-001` | Done (`fabfa89`) |
-| 6 | Day boundaries, savings and forecasts follow `TZ` / `/etc/localtime` | `C-TIME-001` | Done (earlier on the same branch) |
-| 7 | Show host clock-sync state on the dashboard (input interface defined by `D-TIME-001`) | `C-TIME-001` | Open |
-| 8 | Authenticated appliance-settings workflow for SSH enablement and device-generated keypair handling | `C-ACCESS-001` | Open (blocked on `D-ACCESS-001`) |
-| 9 | Application-update controls/status that cannot activate an untrusted, dev-channel or replayed manifest | `C-UPDATE-004`, `C-RELEASE-001` | Open (blocked on `D-UPDATE-001`) |
-| 10 | Bluetooth (BMS + inverter BLE modules) inside the `epilykos` container via host BlueZ over D-Bus; `bms-bridge` sidecar and `epilykos-bms` image retired | `C-RUNTIME-003`, `I-006` | In review (application pull request into `dev`) |
+## 10. Evidence and execution records
 
-These are application changes, not reasons to embed the Node.js application into the OS image build.
+Store evidence under `evidence/stage-N/` or a stable uploaded artifact. Name the board/revision/media, firmware/source and tested artifact, test phases, outcomes and measurements. Record initial 72-hour soak, physical cut/bad-loader/restore transitions and relevant source behavior without claiming a simulated test is physical evidence.
 
-The conditional read-only-container-root requirement in `C-RUNTIME-002` is intentionally retained as a tightening beyond v0.5: once Stage 2 proves Epilykos has no required writes outside mapped persistent/temporary paths (`T-RUNTIME-003`), the production container SHOULD make its own root filesystem read-only as an independent containment layer.
+The plan progress table tracks implementation PRs separately from hardware results. Repeated normal releases use automated checks and publication after the existing maintainer authorization. Initial acceptance and changed-mechanism tests do not become routine manual image approval.
 
-## 10. Evidence directory convention
+## 11. Architecture versus completion
 
-Implementation evidence SHOULD be committed or uploaded under a stable structure. Every evidence file MUST name the board (and revision) it was produced on; release-gating evidence comes from the Tier 1 board.
-
-```text
-evidence/
-├── stage-0/
-│   ├── boot-chain-spike.json
-│   └── build-system-decision.md
-├── stage-1/
-│   ├── provisioning-ethernet.json
-│   ├── provisioning-ap.json
-│   └── provisioning-usb.json
-├── stage-2/
-│   ├── podman-info.json
-│   ├── offline-boot.json
-│   ├── readonly-root.json
-│   ├── memory-soak-72h.json
-│   └── release-provenance.json
-├── stage-3/
-│   └── ble-privilege-spike.json
-├── stage-4/
-│   ├── partition-map.txt
-│   ├── power-cut-test.json
-│   ├── boot-health.json
-│   ├── uboot-env-corruption-recovery.json
-│   └── ssh-access-policy.json
-└── stage-5/
-    ├── rauc-rollback.json
-    ├── app-rollback.json
-    ├── app-manifest-trust.json
-    └── app-manifest-replay.json
-```
-
-A reviewer should be able to trace every release-blocking contract to concrete evidence without relying on prose claims.
-
-## 11. Definition of v1 architecture-complete
-
-The architecture is ready for implementation when all Stage 0 decisions are frozen where required, the complete later-stage decision backlog has been reviewed and assigned due stages, and this document plus `epilykos-os-contracts.yaml` are accepted as the source of truth. From that point onward, narrative architecture documents are explanatory; a code change that conflicts with a contract must either change the contract through review or be rejected.
+The approved scope is a contract for implementation, not a claim the platform is complete. Boot-chain and independent recovery feasibility are outstanding until proven, signing keys are not generated by documentation, and queued features stay pending. Rootfs read-only policy is not secure boot or cryptographic integrity. Direct SD modification/physical media failure is outside the deferred verified-boot guarantee.
 
 ## 12. Changelog
+
+### 0.7.0-draft
+
+- Record the 22 maintainer-approved v1 decisions from 2026-10-17; supersede older GPT, reflash-only recovery, rootless and provisioning/access proposals.
+- Require slot-contained Linux artifacts, automatic dedicated boot-chain recovery, independent both-slot/DATA recovery, recoverable multi-GB maintenance and complete signed offline packages; implementation/evidence remain pending.
+- Define operation-specific storage admission, diagnostics/read-only runtime, board order and automated publication without routine manual image approval; retain explicit v1 deferrals.
 
 ### 0.6.2-draft
 

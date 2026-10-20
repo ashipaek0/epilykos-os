@@ -38,7 +38,6 @@ import time
 import urllib.request
 
 import epilykos_maintenance as maintenance
-import epilykos_app_compat as compat
 
 UPDATE_DIR = os.environ.get('EPILYKOS_UPDATE_DIR', '/data/epilykos/updater')
 IMAGE_ENV = os.environ.get('EPILYKOS_IMAGE_ENV', '/usr/lib/epilykos/image.env')
@@ -309,10 +308,6 @@ def apply(target='app', automatic=False, sequence=None, digest=None):
         except maintenance.MaintenanceError as e:
             raise UpdateError(str(e)) from None
         try:
-            try:
-                compat.running_container(_inspect_app('container', 'epilykos'))
-            except compat.CompatibilityError as e:
-                raise UpdateError(str(e)) from None
             job = {'state': 'downloading', 'started_at': _now(), 'release': candidate['release'],
                    'sequence': candidate['sequence'], 'digest': candidate['digest']}
             if automatic:

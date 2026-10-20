@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real post-build hook and unprivileged filesystem staging cleanup."""
 import os
-import json
 import shutil
 import stat
 import subprocess
@@ -15,7 +14,7 @@ BOARD = ROOT / 'os/board/epilykos/raspberrypi3'
 
 @unittest.skipIf(os.geteuid() == 0, 'staging cleanup must run as an ordinary build user')
 class ImagePermissions(unittest.TestCase):
-    def exercise(self, initial_mode, image_config=None, refused=None):
+    def exercise(self, initial_mode):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             target = base / 'target'
@@ -43,26 +42,18 @@ case "$1" in
           printf 'fixture image' > "$archive" ;;
       esac
     done ;;
-  inspect) printf '%s' "$SKOPEO_CONFIG" ;;
+  inspect) printf '{"architecture":"arm64"}' ;;
   *) exit 1 ;;
 esac
 ''')
             skopeo.chmod(0o755)
             env = dict(os.environ, TARGET_DIR=str(target), EPILYKOS_CHANNEL='dev',
                        EPILYKOS_OS_VERSION='permissions-test',
-                       SKOPEO_CONFIG=image_config if isinstance(image_config, str) else json.dumps(image_config or {
-                           'architecture': 'arm64', 'os': 'linux',
-                           'config': {'Labels': {'io.epilykos.maintenance-lock': 'flock-v1'}}}),
                        PATH=str(commands) + os.pathsep + os.environ['PATH'])
             staged = base / 'filesystem-target'
             try:
                 result = subprocess.run(['sh', str(BOARD / 'post-build.sh')], env=env,
                                         text=True, capture_output=True)
-                if refused:
-                    self.assertNotEqual(result.returncode, 0, 'incompatible preloaded app accepted')
-                    self.assertIn(refused, result.stderr)
-                    self.assertFalse((target / 'usr/lib/epilykos/image.env').exists())
-                    return
                 self.assertEqual(result.returncode, 0, result.stderr)
                 # Buildroot fs/common.mk makes a mode-preserving rootfs copy,
                 # then removes that copy outside fakeroot after image creation.
@@ -90,16 +81,6 @@ esac
 
     def test_incremental_build_repairs_old_nonwritable_directory(self):
         self.exercise(0o555)
-
-    def test_image_without_shared_maintenance_is_refused(self):
-        self.exercise(0o755, {'architecture': 'arm64', 'os': 'linux', 'config': {'Labels': {}}}, 'maintenance')
-
-    def test_image_for_wrong_platform_is_refused(self):
-        self.exercise(0o755, {'architecture': 'amd64', 'os': 'linux',
-                             'config': {'Labels': {'io.epilykos.maintenance-lock': 'flock-v1'}}}, 'platform')
-
-    def test_malformed_image_configuration_is_refused(self):
-        self.exercise(0o755, 'not json', 'configuration')
 
 
 if __name__ == '__main__':

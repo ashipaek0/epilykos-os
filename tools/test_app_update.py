@@ -55,14 +55,28 @@ state = T / 'updater'
 calls = T / 'calls'
 restart_rc = T / 'restart_rc'   # one exit code per line, consumed in order
 
+running = {'Config': {'Labels': {'io.epilykos.maintenance-lock': 'flock-v1'},
+                      'Env': ['EPILYKOS_MAINTENANCE_LOCK=/app/data/.maintenance.lock']},
+           'State': {'Running': True},
+           'Mounts': [{'Type': 'bind', 'Source': '/data/epilykos/app-data', 'Destination': '/app/data', 'RW': True}]}
+(T / 'running.json').write_text(json.dumps([running]))
+for digest, image_id in ID_FOR.items():
+    (T / (image_id[0] + '.json')).write_text(json.dumps([{'Id': image_id, 'Architecture': 'arm64', 'Os': 'linux',
+        'Config': {'Labels': {'io.epilykos.maintenance-lock': 'flock-v1'}}}]))
+(T / 'incompatible.json').write_text(json.dumps([{'Id': 'd' * 64, 'Architecture': 'arm64', 'Os': 'linux', 'Config': {}}]))
+
 (T / 'podman').write_text(f'''#!/bin/sh
 echo "podman $*" >> {calls}
 case "$1" in
   pull) if flock -n {T}/maintenance.lock -c true; then echo "maintenance lock missing" >&2; exit 125; fi
         [ -f {T}/pull_fails ] && {{ echo "Error: initializing source: manifest unknown" >&2; exit 125; }}; exit 0 ;;
   image) case "$2" in
-    inspect) case "$5" in
-      *{DIG1}) echo {ID_FOR[DIG1]} ;; *{DIG2}) echo {ID_FOR[DIG2]} ;; *{DIG3}) echo {ID_FOR[DIG3]} ;; esac ;;
+    inspect) if [ "$#" -eq 3 ]; then
+        if [ -f {T}/bad_candidate ]; then cat {T}/incompatible.json; exit 0; fi
+        case "$3" in *{DIG1}) cat {T}/1.json ;; *{DIG2}) cat {T}/2.json ;; *{DIG3}) cat {T}/3.json ;; esac
+      else
+        case "$5" in *{DIG1}) echo {ID_FOR[DIG1]} ;; *{DIG2}) echo {ID_FOR[DIG2]} ;; *{DIG3}) echo {ID_FOR[DIG3]} ;; esac
+      fi ;;
     exists) exit 0 ;;
   esac ;;
 esac

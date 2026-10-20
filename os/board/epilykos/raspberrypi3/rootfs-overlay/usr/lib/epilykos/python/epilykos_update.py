@@ -263,6 +263,20 @@ def check():
     return {'ok': True, 'app': app, 'os': os_view()}
 
 
+def _inspect_app(kind, reference):
+    try:
+        result = subprocess.run([PODMAN, kind, 'inspect', reference], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        raise UpdateError('Could not verify the app maintenance configuration') from None
+    if result.returncode != 0:
+        raise UpdateError('Could not verify the app maintenance configuration')
+    try:
+        return compat.inspection(result.stdout)
+    except compat.CompatibilityError as e:
+        raise UpdateError(str(e)) from None
+
+
+
 def apply(target='app', automatic=False, sequence=None, digest=None):
     if target == 'os':
         raise UpdateError('EpilykosOS updates are not published yet')
@@ -330,10 +344,10 @@ def _run(candidate, job, lease):
         r = subprocess.run([PODMAN, 'pull', '--quiet', ref], capture_output=True, text=True, timeout=PULL_TIMEOUT_S)
         if r.returncode != 0:
             raise UpdateError('Could not download the update: ' + (r.stderr.strip().splitlines() or ['podman pull failed'])[-1][:200])
-        r = subprocess.run([PODMAN, 'image', 'inspect', '--format', '{{.Id}}', ref], capture_output=True, text=True, timeout=60)
-        image_id = r.stdout.strip()
-        if r.returncode != 0 or not IMAGE_ID_RE.match(image_id):
-            raise UpdateError('The downloaded update could not be found in storage')
+        try:
+            image_id = compat.candidate_image(_inspect_app('image', ref))
+        except compat.CompatibilityError as e:
+            raise UpdateError(str(e)) from None
         cand = dict(candidate, image_id=image_id)
         _write_json('job.json', dict(job, state='starting'))
         _set_active(cand)

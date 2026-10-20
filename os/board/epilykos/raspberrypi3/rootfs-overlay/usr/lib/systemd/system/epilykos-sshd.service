@@ -1,0 +1,21 @@
+[Unit]
+Description=EpilykosOS: SSH maintenance login (off unless turned on in Epilykos settings)
+Documentation=man:sshd(8) man:sshd_config(5)
+# Off by default (C-ACCESS-001): it only starts when Epilykos settings,
+# Raspberry Pi Imager or an authorized_keys file on BOOT turned SSH on.
+ConditionPathExists=/data/ssh/enabled
+RequiresMountsFor=/data
+Wants=epilykos-shadow.service
+After=network.target epilykos-shadow.service epilykos-wifi-import.service
+
+[Service]
+ExecStartPre=/usr/bin/epilykos-ssh hostkey
+ExecStartPre=/usr/sbin/sshd -t
+ExecStart=/usr/sbin/sshd -D -e
+ExecReload=/bin/kill -HUP $MAINPID
+RuntimeDirectory=sshd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

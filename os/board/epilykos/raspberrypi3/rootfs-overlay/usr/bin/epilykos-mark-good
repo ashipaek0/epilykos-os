@@ -1,0 +1,44 @@
+#!/bin/sh
+# Boot-health gate (C-BOOT-003). Marks the booted RAUC slot good only
+# when all of these hold:
+#   - multi-user userspace is reached (this runs after multi-user.target)
+#   - DATA is mounted at /data
+#   - Podman is operational
+#   - the Epilykos container reports healthy (its /healthz, C-RUNTIME-002)
+# Network, Internet, Bluetooth and inverter availability are deliberately
+# not checked (C-BOOT-003, C-NET-001).
+#
+# If the conditions don't hold within the timeout, the slot stays
+# unconfirmed and U-Boot's attempt counter decides what the next boot
+# does. Nothing here reboots the device.
+set -u
+
+# First boot of a slot loads the application image and may migrate the
+# database, so this is generous. The frozen value is C-BOOT-003's open
+# "health-gate timeout".
+TIMEOUT=${EPILYKOS_HEALTH_TIMEOUT:-1200}
+STEP=10
+waited=0
+
+fail() {
+	echo "epilykos-mark-good: $1; slot not marked good" >&2
+	exit 1
+}
+
+findmnt -n /data >/dev/null || fail "/data is not mounted"
+podman info >/dev/null 2>&1 || fail "podman is not operational"
+
+while :; do
+	status=$(podman inspect --format '{{.State.Health.Status}}' epilykos 2>/dev/null || true)
+	if [ "${status}" = "healthy" ]; then
+		break
+	fi
+	if [ "${waited}" -ge "${TIMEOUT}" ]; then
+		fail "epilykos container is '${status:-not running}' after ${TIMEOUT}s"
+	fi
+	sleep "${STEP}"
+	waited=$((waited + STEP))
+done
+
+echo "epilykos-mark-good: system healthy after ${waited}s, marking slot good"
+rauc status mark-good

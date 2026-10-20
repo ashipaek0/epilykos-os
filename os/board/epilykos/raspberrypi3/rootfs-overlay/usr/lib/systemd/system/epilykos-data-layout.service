@@ -1,0 +1,20 @@
+[Unit]
+Description=EpilykosOS: create the state directories kept on DATA
+Documentation=file:///etc/fstab
+# The read-only root's state that must survive a reboot (journal,
+# Bluetooth pairings, last known time) is bind-mounted from DATA by
+# /etc/fstab; this makes sure the sources exist first, which on a fresh
+# DATA they don't.
+DefaultDependencies=no
+RequiresMountsFor=/data
+Before=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mkdir -p /data/journal /data/timesync
+# Pairing keys: bluetooth.service's StateDirectoryMode.
+ExecStart=/bin/mkdir -p -m 0700 /data/bluetooth
+
+[Install]
+WantedBy=local-fs.target

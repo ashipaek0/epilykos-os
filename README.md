@@ -4,48 +4,39 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 
 ## Hardware
 
-| Board | Support |
-|---|---|
-| Raspberry Pi 3B | Tested |
-| Raspberry Pi 4, Raspberry Pi 5 | Best effort, built on proven upstream board support |
+- A Raspberry Pi 3B (the Pi 4 and Pi 5 are planned, best effort)
+- A microSD card, 32 GB or larger
+- Ethernet or Wi-Fi
 
-## Features
+## Getting started
 
 **Setup with no terminal**
-- Set up over Ethernet, over the device's own Wi-Fi access point, or through a USB cable to a computer.
+- Download the image from the [Releases](https://github.com/ashipaek0/epilykos-os/releases) page and flash it with Raspberry Pi Imager or balenaEtcher.
+- To let Raspberry Pi Imager set up your Wi-Fi, add EpilykosOS to its list with `https://github.com/ashipaek0/epilykos-os/releases/latest/download/epilykos-os-imager.json`.
+- Plug in Ethernet, or give it your Wi-Fi from your phone over Bluetooth, add wifi credentials via Raspberry Pi Imager's settings, or with a small wifi.txt file in the boot partition of the SD card.
+- Then open `http://epilykos.local:3000` in a browser.
 - The site time zone is set during setup, so daily totals and forecasts follow local time.
+- The dashboard's port can be changed in Settings → System; port 80 makes the address just `http://epilykos.local`.
 
-**Reliable operation**
-- The system partition is read-only. Your data is kept on a separate persistent partition.
-- Epilykos and the BMS bridge are included in the image, so they start even when there is no network.
-- The application runs in rootless containers, and the BMS bridge gets only the device access it needs.
-- The database is tuned to lose as little data as possible if the power is cut.
-- Logs go to the system journal and don't wear out the SD card.
+## If something goes wrong
+
+**Can't open the dashboard?** From another computer, try to ping a third device on the same network. If that fails too, the router is keeping devices apart: check its "AP isolation" or "client isolation" settings and restart it. Plugging the Pi into Ethernet also works.
+
+**Forgot the dashboard password?** Put a file named `dashboard-password.txt` with the new password on its first line on the SD card's boot drive, then start the Pi. The file is deleted once it is used. With a keyboard and screen, `epilykos-reset-password` does the same.
+
+**Wi-Fi setup not showing on improv-wifi.com?** Use "Change Wi-Fi" in Settings → System, and don't pair the Pi in your computer's Bluetooth menu: setup doesn't need it.
+
+## What it does
 
 **Safe updates**
-- The OS is updated with A/B slots. Updates are signed, and a failed boot rolls back to the previous slot automatically.
 - Application updates are separate from OS updates and can be rolled back on their own.
-- Every application image is pinned by digest, and stable devices only run images built from `main`.
-- Update manifests are checked for authenticity, and an older release can't be replayed.
+- Every application image is pinned by digest.
 
-**Secure by default**
-- SSH is off by default. When it is enabled, it accepts keys only, with no password or root login.
-- Verified boot is available as an option.
+Signed app updates support health checks, rollback and optional automatic installation. Signed OS bundle installation remains planned. Appliance maintenance and pairing details are in [the feature guide](evidence/stage-1/maintenance-and-pairing.md).
 
-## Releases
+## For developers
 
 | Channel | Branch | Contents |
 |---|---|---|
 | Stable | `main` | Reviewed releases for devices in the field |
 | Dev | `dev` | Integration builds for testing |
-
-Each Epilykos image build opens a pull request that pins the new image digests. Merging it accepts that release for its channel.
-
-## Development
-
-```bash
-pip install pyyaml
-make contracts   # validate the contracts
-make render      # regenerate contracts/EPILYKOS-OS-CONTRACTS.md
-make test        # validator self-tests
-```

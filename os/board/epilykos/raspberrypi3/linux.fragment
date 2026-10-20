@@ -1,7 +1,75 @@
-# Config fragment applied on top of the mainline "bcm2709" defconfig.
+# Config fragment applied on top of the mainline arm64 "defconfig".
 # Kept small and commented — anything here should trace to a contract.
 
-# Rootless Podman (C-RUNTIME-001): user namespaces + cgroup v2 controllers.
+# -- Boot-critical drivers built in (there is no initramfs): SD card
+# (sdhost), ext4 root, mailbox/firmware, and the mini-UART console.
+CONFIG_MMC_BCM2835=y
+CONFIG_EXT4_FS=y
+CONFIG_RASPBERRYPI_FIRMWARE=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_SERIAL_8250_BCM2835AUX=y
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_BCM2835_WDT=y
+
+# The firmware GPIO expander drives BT_ON and WL_ON on the Pi 3B; without
+# it the Bluetooth and Wi-Fi drivers wait forever for their power GPIOs.
+CONFIG_GPIO_RASPBERRYPI_EXP=y
+
+# Onboard Ethernet (Pi 3B: SMSC LAN9514) built in so eth comes up with no
+# module loading involved; LAN78xx covers the 3B+.
+CONFIG_USB_DWC2=y
+CONFIG_USB_NET_DRIVERS=y
+CONFIG_USB_USBNET=y
+CONFIG_USB_NET_SMSC95XX=y
+CONFIG_USB_LAN78XX=y
+
+# HDMI console: U-Boot hands over a simple framebuffer. vc4 KMS is left
+# out so nothing takes the console away from it.
+CONFIG_DRM=y
+CONFIG_DRM_SIMPLEDRM=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+# CONFIG_DRM_VC4 is not set
+
+# -- Bluetooth (C-RUNTIME-003): the onboard BCM43438 sits on the PL011
+# as a serdev device. Kept as modules so they load after the root
+# filesystem is up and the BCM43430A1.hcd patch can be read. BT_LE is
+# off in the arm64 defconfig and is what BLE BMS/inverter modules need.
+CONFIG_BT=m
+CONFIG_BT_LE=y
+CONFIG_BT_HCIUART=m
+CONFIG_BT_HCIUART_BCM=y
+CONFIG_SERIAL_DEV_BUS=y
+CONFIG_SERIAL_DEV_CTRL_TTYPORT=y
+CONFIG_BRCMFMAC=m
+# The Wi-Fi chip's SDIO host (bcm2835-sdhci); not in the arm64 defconfig.
+CONFIG_MMC_SDHCI_IPROC=m
+
+# -- Wi-Fi: iwd does its cryptography through the kernel (AF_ALG sockets
+# and keyctl), none of which the arm64 defconfig enables.
+CONFIG_CRYPTO_USER_API_HASH=y
+CONFIG_CRYPTO_USER_API_SKCIPHER=y
+CONFIG_CRYPTO_USER_API_ENABLE_OBSOLETE=y
+CONFIG_KEY_DH_OPERATIONS=y
+CONFIG_CRYPTO_ECB=y
+CONFIG_CRYPTO_CBC=y
+CONFIG_CRYPTO_CMAC=y
+CONFIG_CRYPTO_HMAC=y
+CONFIG_CRYPTO_MD4=y
+CONFIG_CRYPTO_MD5=y
+CONFIG_CRYPTO_SHA1=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_CRYPTO_SHA512=y
+CONFIG_CRYPTO_AES=y
+CONFIG_CRYPTO_DES=y
+CONFIG_CRYPTO_ARC4=y
+CONFIG_ASYMMETRIC_KEY_TYPE=y
+CONFIG_ASYMMETRIC_PUBLIC_KEY_SUBTYPE=y
+CONFIG_X509_CERTIFICATE_PARSER=y
+CONFIG_PKCS7_MESSAGE_PARSER=y
+CONFIG_PKCS8_PRIVATE_KEY_PARSER=y
+
+# -- Podman (C-RUNTIME-001): namespaces, cgroup v2 controllers, overlay.
 CONFIG_USER_NS=y
 CONFIG_CGROUPS=y
 CONFIG_CGROUP_PIDS=y
@@ -11,12 +79,48 @@ CONFIG_CPUSETS=y
 CONFIG_OVERLAY_FS=y
 CONFIG_FUSE_FS=y
 
-# RAUC's uboot bootchooser backend and A/B rootfs use plain ext4 + the
-# in-tree squashfs is not needed; keep it off to shrink the kernel image.
-CONFIG_SQUASHFS=n
+# zram is the only swap C-RESOURCE-001 allows; zstd is its compressor
+# (D-RESOURCE-001).
+CONFIG_ZRAM=m
+CONFIG_CRYPTO_ZSTD=y
 
-# BMS bridge hardware access (Stage 3): serial/RS232/RS485, BLE.
-CONFIG_BLUETOOTH=y
-CONFIG_BLUETOOTH_HCIUART=y
-CONFIG_SERIAL_8250=y
-CONFIG_SERIAL_8250_CONSOLE=y
+# -- Trim SoC families this board is not. Their drivers depend on these
+# symbols, so this removes hundreds of modules and a good share of the
+# build time without touching anything the BCM2837 uses.
+# CONFIG_ARCH_ACTIONS is not set
+# CONFIG_ARCH_SUNXI is not set
+# CONFIG_ARCH_ALPINE is not set
+# CONFIG_ARCH_APPLE is not set
+# CONFIG_ARCH_BCM_IPROC is not set
+# CONFIG_ARCH_BCMBCA is not set
+# CONFIG_ARCH_BRCMSTB is not set
+# CONFIG_ARCH_BERLIN is not set
+# CONFIG_ARCH_EXYNOS is not set
+# CONFIG_ARCH_SPARX5 is not set
+# CONFIG_ARCH_K3 is not set
+# CONFIG_ARCH_LG1K is not set
+# CONFIG_ARCH_HISI is not set
+# CONFIG_ARCH_KEEMBAY is not set
+# CONFIG_ARCH_MEDIATEK is not set
+# CONFIG_ARCH_MESON is not set
+# CONFIG_ARCH_MVEBU is not set
+# CONFIG_ARCH_NXP is not set
+# CONFIG_ARCH_MA35 is not set
+# CONFIG_ARCH_NPCM is not set
+# CONFIG_ARCH_QCOM is not set
+# CONFIG_ARCH_REALTEK is not set
+# CONFIG_ARCH_RENESAS is not set
+# CONFIG_ARCH_ROCKCHIP is not set
+# CONFIG_ARCH_SEATTLE is not set
+# CONFIG_ARCH_INTEL_SOCFPGA is not set
+# CONFIG_ARCH_STM32 is not set
+# CONFIG_ARCH_SYNQUACER is not set
+# CONFIG_ARCH_TEGRA is not set
+# CONFIG_ARCH_TESLA_FSD is not set
+# CONFIG_ARCH_SPRD is not set
+# CONFIG_ARCH_THUNDER is not set
+# CONFIG_ARCH_THUNDER2 is not set
+# CONFIG_ARCH_UNIPHIER is not set
+# CONFIG_ARCH_VISCONTI is not set
+# CONFIG_ARCH_XGENE is not set
+# CONFIG_ARCH_ZYNQMP is not set

@@ -1,0 +1,4 @@
+# The SSH maintenance login (C-ACCESS-001). Its password and keys are on
+# DATA; the password in the image's /etc/shadow is never used
+# (epilykos-ssh shadow fills it in at boot).
+epilykos 1000 epilykos 1000 * /data/home/epilykos /bin/sh - EpilykosOS maintenance login

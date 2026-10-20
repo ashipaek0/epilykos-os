@@ -1,0 +1,15 @@
+[Unit]
+Description=EpilykosOS: compressed swap in RAM (zram)
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=swap.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/epilykos-zram start
+ExecStop=/usr/bin/epilykos-zram stop
+
+[Install]
+WantedBy=swap.target

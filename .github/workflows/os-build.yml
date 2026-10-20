@@ -1,0 +1,494 @@
+name: OS image build
+
+# The real thing: a from-scratch Buildroot build of EpilykosOS for a
+# real board (os/build.sh). This is NOT the fast structural lint in
+# os-build-check.yml — a cold run can take well over an hour even with
+# caching, so it does not run on every pull request or on dev. It runs on
+# demand (Actions -> OS image build -> Run workflow, on any branch), and on
+# pushes to main that touch the build tree, i.e. when a stable release is
+# promoted from dev.
+#
+# What "passing" means here: the image built, Buildroot's own genimage
+# step assembled a partition-correct sdcard.img, and a few structural
+# checks below hold. It does NOT mean the image boots on a real Pi 3B —
+# that's C-BOOT-000, and needs the real hardware this environment
+# doesn't have. The qemu-smoke-test job boots the image through U-Boot
+# under QEMU as a best-effort check; it is not a substitute for that
+# evidence. Publication is gated by validation/build/artifact policy, not QEMU.
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'Board defconfig to build (os/configs/epilykos_<board>_defconfig)'
+        required: false
+        default: raspberrypi3
+      channel:
+        description: 'Application manifest to preload (manifests/<channel>.yaml)'
+        required: false
+        default: dev
+        type: choice
+        options: [dev, stable]
+      image_from_run:
+        description: 'Skip the build and boot-test the image from this earlier run id'
+        required: false
+        default: ''
+  # A release you create on GitHub (Releases -> Draft a new release, tag
+  # v1.0 on main) builds that version; later builds of main count on from it.
+  release:
+    types: [published]
+  push:
+    branches: [main]
+    paths:
+      - 'os/**'
+      - 'manifests/stable.yaml'
+      - '.github/workflows/os-build.yml'
+
+permissions:
+  contents: read
+
+# One build of main at a time, so two quick merges never get the same version.
+concurrency:
+  group: os-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BOARD: ${{ github.event.inputs.board || 'raspberrypi3' }}
+  # main ships the stable application release; anything else (a manual
+  # run on dev or a feature branch) preloads the dev manifest unless the
+  # run asks for stable.
+  EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      source_on_main: ${{ steps.source.outputs.on_main }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml==6.0.2 dbus-fast==4.0.4
+      - name: Required host and contract regressions
+        run: |
+          make test
+          make contracts
+      - name: Record stable-source ancestry
+        id: source
+        run: |
+          if git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo 'on_main=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'on_main=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: validate
+    if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_new: ${{ steps.version.outputs.is_new }}
+      channel: ${{ env.EPILYKOS_CHANNEL }}
+      image_available: ${{ steps.image-artifact.outcome == 'success' }}
+      image_sha256: ${{ steps.compress.outputs.image_sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # tags and history, for the version
+
+      # v0.1, v0.2 … on main; the tag you typed for a release; 0.3-dev+abc1234
+      # for a build run by hand on another branch (tools/os_version.py).
+      - name: Version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then v="$(python3 tools/os_version.py release "$RELEASE_TAG")"
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then v="$(python3 tools/os_version.py main)"
+          else v="$(python3 tools/os_version.py dev)"; fi
+          echo "$v"
+          version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' <<<"$v")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag"] or "")' <<<"$v")" >> "$GITHUB_OUTPUT"
+          echo "is_new=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["is_new"]).lower())' <<<"$v")" >> "$GITHUB_OUTPUT"
+          echo "EPILYKOS_OS_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Free up disk space
+        run: |
+          # A full Buildroot build (toolchain + kernel + rauc + podman +
+          # systemd, two rootfs copies, the preloaded application image)
+          # needs real headroom; the default runner image is otherwise too
+          # full of things this build never touches.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h /
+
+      - name: Install host build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex cpio unzip rsync file wget git \
+            python3 python3-dev perl patch tar bzip2 lzop lz4 zstd \
+            libssl-dev libncurses-dev device-tree-compiler \
+            genimage mtools dosfstools e2fsprogs skopeo
+
+      # Restore/save as separate steps so the caches are kept even when the
+      # build fails: a failure ~80 minutes in shouldn't make the retry start
+      # from nothing (actions/cache only saves on success).
+      - name: Restore Buildroot package downloads
+        id: dl-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: os/build/dl
+          key: os-dl-${{ hashFiles('os/configs/epilykos_raspberrypi3_defconfig', 'os/board/epilykos/raspberrypi3/linux.fragment', 'os/board/epilykos/raspberrypi3/uboot.fragment') }}
+          restore-keys: |
+            os-dl-
+
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: os-ccache-${{ runner.os }}-${{ env.BOARD }}-${{ github.run_id }}
+          restore-keys: |
+            os-ccache-${{ runner.os }}-${{ env.BOARD }}-
+            os-ccache-${{ runner.os }}-
+
+      - name: Build
+        id: build
+        run: os/build.sh "${BOARD}"
+
+      - name: Save Buildroot package downloads
+        if: always() && steps.dl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: os/build/dl
+          key: ${{ steps.dl-cache.outputs.cache-primary-key }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.buildroot-ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Structural checks on the produced image
+        run: |
+          set -e
+          IMG=$(find os/build -path '*/output/images/sdcard.img' -print -quit)
+          test -n "$IMG" || { echo "sdcard.img not produced"; exit 1; }
+          IMAGES_DIR=$(dirname "$IMG")
+          TARGET_DIR=$(dirname "$IMAGES_DIR")/target
+          echo "Image: $IMG ($(du -h --apparent-size "$IMG" | cut -f1))"
+          fdisk -l "$IMG"
+
+          # Four primary MBR partitions (BOOT, ROOT-A, ROOT-B, DATA) and the
+          # fixed disk signature that boot.cmd, fstab and RAUC rely on for
+          # PARTUUID=45504c4b-0N.
+          PARTS=$(fdisk -l "$IMG" | grep -c "^${IMG}[0-9]")
+          test "$PARTS" -eq 4 || { echo "expected 4 partitions, found $PARTS"; exit 1; }
+          fdisk -l "$IMG" | grep -q "Disk identifier: 0x45504c4b" || { echo "disk signature is not 0x45504c4b"; exit 1; }
+
+          e2label "$IMAGES_DIR/rootfs.ext4" | grep -qx ROOT-A || { echo "rootfs.ext4 not labelled ROOT-A"; exit 1; }
+          e2label "$IMAGES_DIR/rootfs-b.ext4" | grep -qx ROOT-B || { echo "rootfs-b.ext4 not labelled ROOT-B"; exit 1; }
+          e2label "$IMAGES_DIR/data.ext4" | grep -qx DATA || { echo "data.ext4 not labelled DATA"; exit 1; }
+
+          # The U-Boot environment area (4 MiB, two 16 KiB copies) must ship
+          # blank so U-Boot starts from its defaults, not a stale env.
+          test -z "$(dd if="$IMG" bs=16K skip=256 count=2 status=none | tr -d '\0' | head -c1)" \
+            || { echo "U-Boot environment area is not blank"; exit 1; }
+
+          # Everything the Pi firmware and U-Boot load from BOOT.
+          BOOT_START=$(fdisk -o Device,Start -l "$IMG" | awk -v dev="${IMG}1" '$1==dev {print $2}')
+          for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
+            mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
+          done
+          mtype -i "${IMG}@@$((BOOT_START * 512))" ::config.txt | grep -qx 'arm_64bit=1' || { echo "config.txt is not 64-bit"; exit 1; }
+
+          # 64-bit userland, and the application image actually preloaded.
+          file -L "$TARGET_DIR/usr/bin/podman" | grep -q 'ARM aarch64' || { echo "podman is not aarch64"; exit 1; }
+          test -s "$TARGET_DIR/usr/lib/epilykos/epilykos.oci.tar" || { echo "Epilykos image archive missing"; exit 1; }
+          cat "$TARGET_DIR/usr/lib/epilykos/image.env"
+          grep -q "^EPILYKOS_CHANNEL=${EPILYKOS_CHANNEL}$" "$TARGET_DIR/usr/lib/epilykos/image.env" || { echo "wrong channel preloaded"; exit 1; }
+
+          # Wi-Fi: radio firmware, regulatory database, and the Python the
+          # setup tools run on (with dbus-fast for Bluetooth).
+          ls "$TARGET_DIR"/lib/firmware/brcm/brcmfmac43430-sdio*.bin >/dev/null || { echo "Wi-Fi firmware missing"; exit 1; }
+          ls "$TARGET_DIR"/lib/firmware/brcm/BCM43430A1*.hcd >/dev/null || { echo "Bluetooth firmware missing"; exit 1; }
+          test -f "$TARGET_DIR/lib/firmware/regulatory.db" || { echo "wireless regulatory database missing"; exit 1; }
+          ls -d "$TARGET_DIR"/usr/lib/python3*/site-packages/dbus_fast >/dev/null || { echo "dbus-fast missing"; exit 1; }
+          test -x "$TARGET_DIR/usr/bin/iw" || { echo "iw missing"; exit 1; }
+
+          # Units the appliance depends on are enabled. Buildroot runs
+          # `systemctl preset-all` on a per-filesystem copy of the target
+          # directory, so the enable links exist only inside rootfs.ext4,
+          # not in output/target: read them from the image.
+          enabled() { debugfs -R "ls /etc/systemd/system/$1" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | tr -s ' ' '\n'; }
+          WANTS=$(enabled multi-user.target.wants)
+          for u in epilykos.service epilykos-mark-good.service \
+                   systemd-networkd.service iwd.service epilykos-wifi-import.service \
+                   epilykos-improv.service epilykos-machine-id.service \
+                   epilykos-hostd.service epilykos-sshd.service; do
+            echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
+          done
+          for u in epilykos-data-layout.service epilykos-data-grow.service; do
+            enabled local-fs.target.wants | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
+          done
+          enabled swap.target.wants | grep -qx epilykos-zram.service || { echo "epilykos-zram.service is not enabled in rootfs.ext4"; exit 1; }
+          enabled sysinit.target.wants | grep -qx epilykos-shadow.service || { echo "epilykos-shadow.service is not enabled in rootfs.ext4"; exit 1; }
+          if enabled multi-user.target.wants | grep -qx sshd.service; then echo "the stock sshd.service must stay disabled (C-ACCESS-001)"; exit 1; fi
+
+          # SSH maintenance login (C-ACCESS-001): sshd and sudo present, the
+          # epilykos user exists, root can never log in over SSH.
+          test -x "$TARGET_DIR/usr/sbin/sshd" && test -x "$TARGET_DIR/usr/bin/ssh-keygen" || { echo "OpenSSH server or ssh-keygen missing"; exit 1; }
+          # epilykos_ssh hashes the SSH password with libcrypt through ctypes.
+          ls "$TARGET_DIR"/usr/lib/libcrypt.so.[12] >/dev/null 2>&1 || { echo "libcrypt.so.2 / .so.1 missing (SSH password hashing)"; exit 1; }
+          # Bluetooth LE only (no classic pairing), Wi-Fi power saving off, clock floor.
+          grep -qx 'ControllerMode = le' "$TARGET_DIR/etc/bluetooth/main.conf" || { echo "BlueZ is not LE-only"; exit 1; }
+          test -x "$TARGET_DIR/usr/sbin/iw" && grep -q 'power_save off' "$TARGET_DIR/usr/lib/udev/rules.d/80-epilykos-wifi-powersave.rules" || { echo "Wi-Fi power-save rule or iw missing"; exit 1; }
+          test -f "$TARGET_DIR/usr/lib/clock-epoch" || { echo "/usr/lib/clock-epoch missing"; exit 1; }
+          # Users and setuid bits are applied on the filesystem's own copy
+          # of the target directory: read them from the image.
+          debugfs -R "stat /usr/bin/sudo" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | grep -Eq 'Mode: +04755' || { echo "sudo missing or not setuid"; exit 1; }
+          IMG_PASSWD=$(debugfs -R "cat /etc/passwd" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null)
+          echo "$IMG_PASSWD" | grep -q '^epilykos:x:1000:1000:' || { echo "user epilykos (1000) missing"; exit 1; }
+          echo "$IMG_PASSWD" | grep -q '^sshd:' || { echo "sshd privilege-separation user missing"; exit 1; }
+          grep -qx 'PermitRootLogin no' "$TARGET_DIR/etc/ssh/sshd_config" || { echo "sshd_config allows root login"; exit 1; }
+          grep -qx '@includedir /etc/sudoers.d' "$TARGET_DIR/etc/sudoers" || { echo "sudoers does not read sudoers.d"; exit 1; }
+
+          # Read-only root (C-BOOT-001): fstab keeps / read-only, the boot
+          # script passes ro, and /var is the tmpfs Buildroot fills from
+          # its factory copy.
+          grep -Eq '^/dev/root[[:space:]]+/[[:space:]]+auto[[:space:]]+ro[[:space:]]' "$TARGET_DIR/etc/fstab" || { echo "fstab does not mount / read-only"; exit 1; }
+          grep -q ' ro fsck.repair=yes' os/board/epilykos/raspberrypi3/boot.cmd || { echo "boot.cmd does not boot read-only"; exit 1; }
+          # var.mount is added on the filesystem's own copy of the target
+          # directory, like the enable links: read it from the image.
+          debugfs -R "stat /usr/lib/systemd/system/var.mount" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | grep -q '^Inode:' || { echo "no tmpfs /var for the read-only root"; exit 1; }
+          enabled bluetooth.target.wants | grep -qx bluetooth.service || { echo "bluetooth.service is not enabled in rootfs.ext4"; exit 1; }
+          enabled getty.target.wants | grep -qx 'serial-getty@ttyS1.service' || { echo "no serial console login in rootfs.ext4"; exit 1; }
+
+          echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
+
+      # Uploaded whenever the build itself succeeded, even if a structural
+      # check above failed, so a two-hour build is never thrown away; the
+      # job still fails in that case.
+      - name: Compress image for upload
+        id: compress
+        if: always() && steps.build.outcome == 'success'
+        run: |
+          IMAGES_DIR=$(dirname "$(find os/build -path '*/output/images/sdcard.img' -print -quit)")
+          echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
+          zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
+          echo "image_sha256=$(sha256sum "${IMAGES_DIR}/sdcard.img.zst" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        id: image-artifact
+        if: always() && steps.build.outcome == 'success'
+        with:
+          name: epilykos-${{ env.BOARD }}-sdcard
+          path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
+          retention-days: 14
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: epilykos-${{ env.BOARD }}-build-log
+          path: |
+            os/build/buildroot-*/output/build/build-time.log
+            os/build/buildroot-*/.config
+          retention-days: 14
+          if-no-files-found: ignore
+
+  pipeline-policy:
+    needs: [validate, build]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decision.outputs.publish }}
+      diagnose: ${{ steps.decision.outputs.diagnose }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Decide publication and diagnostic prerequisites
+        id: decision
+        env:
+          POLICY_VALIDATION: ${{ needs.validate.result }}
+          POLICY_BUILD: ${{ needs.build.result }}
+          POLICY_ARTIFACT: ${{ needs.build.outputs.image_available }}
+          POLICY_CHANNEL: ${{ needs.build.outputs.channel }}
+          POLICY_EVENT: ${{ github.event_name }}
+          POLICY_REF: ${{ github.ref }}
+          POLICY_NEW_VERSION: ${{ needs.build.outputs.is_new }}
+          POLICY_SOURCE_ON_MAIN: ${{ needs.validate.outputs.source_on_main }}
+          POLICY_IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
+          POLICY_IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+        run: |
+          python3 tools/image_release_policy.py | tee pipeline-policy.json
+          echo '### OS publication / diagnostic policy' >> "$GITHUB_STEP_SUMMARY"
+          cat pipeline-policy.json >> "$GITHUB_STEP_SUMMARY"
+
+  qemu-smoke-test:
+    needs: pipeline-policy
+    if: ${{ !cancelled() && needs.pipeline-policy.outputs.diagnose == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    # Best effort, two boots, not C-BOOT-000 evidence:
+    # 1. U-Boot: QEMU's raspi3b has no VideoCore firmware, so it starts
+    #    u-boot.bin directly. The firmware normally muxes the GPIOs (the
+    #    console UART, the SD card's controller); without it U-Boot may
+    #    print on the other UART or not see the card, so both UARTs are
+    #    logged and a miss here is reported, not failed.
+    # 2. Kernel: QEMU loads the image's own Image + DTB and boots
+    #    root=PARTUUID=45504c4b-02 from the SD card, exactly the command
+    #    line boot.scr builds. This checks the kernel, the root mount and
+    #    systemd bringing up the appliance's units. This remains diagnostic
+    #    until calibrated against known-good and deliberately broken images.
+    # Neither diagnostic success nor failure is a publication prerequisite.
+    continue-on-error: true
+    steps:
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools zstd
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-sdcard
+          path: artifact
+          run-id: ${{ github.event.inputs.image_from_run || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Prepare image
+        run: |
+          set -e
+          zstd -d artifact/sdcard.img.zst -o sdcard.img
+          BOOT_START=$(fdisk -o Device,Start -l sdcard.img | awk -v dev="sdcard.img1" '$1==dev {print $2}')
+          for f in u-boot.bin Image bcm2837-rpi-3-b.dtb; do
+            mcopy -i "sdcard.img@@$((BOOT_START * 512))" "::$f" "./$f"
+          done
+          # QEMU's SD card model needs a power-of-two size.
+          truncate -s 4G sdcard.img
+          cp --sparse=always sdcard.img sdcard-kernel.img
+
+      - name: "Boot 1: through U-Boot (reported, not gating)"
+        run: |
+          set +e
+          timeout 300 qemu-system-aarch64 -M raspi3b -m 1G \
+            -kernel u-boot.bin \
+            -drive if=sd,format=raw,file=sdcard.img \
+            -serial file:uboot-uart0.log -serial file:uboot-uart1.log \
+            -display none -no-reboot
+          for u in uart0 uart1; do echo "--- $u ---"; cat uboot-$u.log; echo; done
+          if cat uboot-uart*.log | grep -q "EpilykosOS: booting slot A"; then
+            echo "U-Boot ran boot.scr and chose slot A."
+          else
+            echo "::warning::U-Boot under QEMU did not reach boot.scr (see the logs above); this needs the real Pi firmware"
+          fi
+
+      - name: "Boot 2: kernel and root filesystem (diagnostic)"
+        run: |
+          set +e
+          # The command line boot.scr builds, plus the kernel log mirrored to
+          # the PL011 (keep_bootcon), because QEMU's mini-UART clock setup can
+          # differ from the real firmware's. Service logs go straight to the
+          # console: the image keeps the kernel log level at warnings, which
+          # would hide them if they were forwarded through the kernel log.
+          timeout 900 qemu-system-aarch64 -M raspi3b -m 1G \
+            -kernel Image -dtb bcm2837-rpi-3-b.dtb \
+            -append "root=PARTUUID=45504c4b-02 rauc.slot=A rootfstype=ext4 rootwait ro fsck.repair=yes console=ttyS1,115200 earlycon=pl011,mmio32,0x3f201000 keep_bootcon systemd.journald.forward_to_console=1 systemd.journald.max_level_console=info systemd.log_target=console" \
+            -drive if=sd,format=raw,file=sdcard-kernel.img \
+            -serial file:kernel-uart0.log -serial file:kernel-uart1.log \
+            -display none -no-reboot &
+          QEMU=$!
+          for i in $(seq 1 180); do
+            sleep 5
+            cat kernel-uart*.log 2>/dev/null | grep -qE "login:|Kernel panic|Reached target .*Multi-User" && break
+            kill -0 "$QEMU" 2>/dev/null || break
+          done
+          sleep 20
+          kill "$QEMU" 2>/dev/null
+          for u in uart0 uart1; do echo "--- $u ---"; cat kernel-$u.log; echo; done
+          LOG=$(cat kernel-uart*.log)
+          fail=0
+          echo "$LOG" | grep -q "Linux version" || { echo "::error::kernel never started"; fail=1; }
+          echo "$LOG" | grep -qiE "kernel panic|Oops" && { echo "::error::kernel panicked"; fail=1; }
+          echo "$LOG" | grep -qE "EXT4-fs \(mmcblk[0-9]p2\): mounted|VFS: Mounted root" || { echo "::error::ROOT-A (PARTUUID=45504c4b-02) was not mounted"; fail=1; }
+          echo "$LOG" | grep -qE "Reached target .*Multi-User|login:" || { echo "::error::systemd did not reach multi-user"; fail=1; }
+          echo "$LOG" | grep -q "Mounted root (ext4 filesystem) readonly" || { echo "::error::the root filesystem was not mounted read-only"; fail=1; }
+          echo "$LOG" | grep -E "Failed to start|FAILED" | head -20
+          # RAUC confirms the slot (C-BOOT-003); without it every boot counts
+          # down the slot's attempts.
+          echo "$LOG" | grep -qE "Failed to start RAUC Update Service|rauc\.service: Failed with result|rauc\[[0-9]+\]: Failed to" && { echo "::error::rauc.service failed"; echo "$LOG" | grep -iE "rauc" | head -40; fail=1; }
+          # Every EpilykosOS service must start (radio-less QEMU or not).
+          echo "$LOG" | grep -E "epilykos[a-z-]*\.service: Failed with result|Failed to start EpilykosOS" && { echo "::error::an EpilykosOS service failed"; fail=1; }
+          exit $fail
+
+      - name: Preserve diagnostic emulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-qemu-diagnostics
+          path: |
+            uboot-uart*.log
+            kernel-uart*.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  # A new version of main, or a release you created: put the SD card image on
+  # its GitHub Release only after required validation, build, structure and
+  # artifact policy pass. Diagnostic QEMU is independent. A failed build
+  # never uses up a number. Releases made with GITHUB_TOKEN do
+  # not start this workflow again. Test builds (dev, branches) stay CI
+  # artifacts only, kept 14 days.
+  #
+  # Each release carries the image (.zst, the build's own output: Raspberry
+  # Pi Imager 1.7+ and balenaEtcher read it) and an Imager OS list, so
+  # Imager can offer EpilykosOS with its Wi-Fi settings. The list of the
+  # newest release always has the same address:
+  #   https://github.com/<owner>/<repo>/releases/latest/download/epilykos-os-imager.json
+  release:
+    needs: [build, pipeline-policy]
+    if: ${{ !cancelled() && needs.pipeline-policy.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7   # tools/imager_os_list.py
+      - name: Install zstd
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zstd
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-sdcard
+          path: artifact
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+          IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+        run: |
+          set -e
+          python3 tools/image_release_policy.py --verify-artifact artifact/sdcard.img.zst --sha256 "$IMAGE_SHA256"
+          base="epilykos-os-v${VERSION}-${BOARD}.img"
+          mv artifact/sdcard.img.zst "$base.zst"
+          # Unpacked only to measure it: Imager checks the written size and SHA-256.
+          zstd -d -q "$base.zst" -o "$base"
+          python3 tools/imager_os_list.py --image "$base" --download "$base.zst" \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${base}.zst" \
+            --name "EpilykosOS ${VERSION} (Raspberry Pi 3B)" > epilykos-os-imager.json
+          if [ "$GITHUB_EVENT_NAME" != release ]; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "EpilykosOS $VERSION" --generate-notes --latest
+          fi
+          gh release upload "$TAG" "$base.zst" epilykos-os-imager.json \
+            --repo "$GITHUB_REPOSITORY" --clobber

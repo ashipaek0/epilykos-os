@@ -1,0 +1,86 @@
+#!/bin/sh
+# Start the Epilykos container. Called by epilykos.service; the options
+# mirror what a Quadlet would generate (C-RUNTIME-002), written as a
+# script because Buildroot's Podman is built without the Quadlet
+# generator.
+#
+# - Image: the exact image ID this OS build preloaded (image.env), never
+#   a tag, so nothing is pulled and nothing can drift.
+# - Host network: the app listens on the box's own port (3000 unless
+#   changed in Epilykos settings, /data/epilykos/port) and Tuya LAN
+#   discovery works.
+# - Bluetooth: the host's BlueZ over the system D-Bus socket, no BlueZ in
+#   the container, no privileged mode (C-RUNTIME-003).
+# - Serial adapters present at start (ttyUSB*/ttyACM*) are passed in,
+#   with the host dialout group so the app user can open them.
+set -e
+. /usr/lib/epilykos/image.env
+
+# An application update installed from Epilykos settings (epilykos_update)
+# names its image in active.env on DATA. It is used only when it is at least
+# as new as what this OS slot preloaded, and only once it is in storage;
+# otherwise the preloaded image runs. Parsed, never sourced.
+ACTIVE=/data/epilykos/updater/active.env
+if [ -f "${ACTIVE}" ]; then
+	active_id=$(sed -n 's/^EPILYKOS_ACTIVE_IMAGE_ID=\([0-9a-f]\{64\}\)$/\1/p' "${ACTIVE}")
+	active_seq=$(sed -n 's/^EPILYKOS_ACTIVE_SEQUENCE=\([0-9]\{1,9\}\)$/\1/p' "${ACTIVE}")
+	if [ -n "${active_id}" ] && [ -n "${active_seq}" ] &&
+		[ "${active_seq}" -ge "${EPILYKOS_SEQUENCE:-0}" ] && podman image exists "${active_id}"; then
+		EPILYKOS_IMAGE_ID=${active_id}
+	fi
+fi
+
+# Dashboard port (epilykos_port.py has the same rules): 80 or 1024-65535,
+# not 5353/5355, else 3000. Parsed, never sourced.
+PORT=3000
+p=$(sed -n '1s/^\([1-9][0-9]\{1,4\}\)$/\1/p' /data/epilykos/port 2>/dev/null || true)
+if [ -n "${p}" ] && { [ "${p}" -eq 80 ] || { [ "${p}" -ge 1024 ] && [ "${p}" -le 65535 ]; }; } &&
+	[ "${p}" -ne 5353 ] && [ "${p}" -ne 5355 ]; then
+	PORT=${p}
+fi
+
+# TZ is validated by the host before reaching Podman. Never source a DATA file.
+TZ=$(python3 -c 'import sys; sys.path.insert(0,"/usr/lib/epilykos/python"); import epilykos_system as s; print(s.timezone())')
+
+DIALOUT_GID=$(awk -F: '$1 == "dialout" { print $3 }' /etc/group)
+
+set -- \
+	--name epilykos \
+	--cidfile=/run/epilykos.cid \
+	--replace --rm -d \
+	--cgroups=split \
+	--sdnotify=healthy \
+	--log-driver=journald \
+	--network=host \
+	--stop-timeout=30 \
+	--memory=640m \
+	--oom-score-adj=500 \
+	--tmpfs /tmp:rw,size=64m,mode=1777 \
+	--volume /data/epilykos/app-data:/app/data \
+	--volume /run/dbus:/run/dbus:ro \
+	--volume /run/epilykos-host:/run/epilykos-host \
+	--env EPILYKOS_HOST_SOCKET=/run/epilykos-host/host.sock \
+	--env EPILYKOS_MAINTENANCE_LOCK=/app/data/.maintenance.lock \
+	--volume /etc/localtime:/etc/localtime:ro \
+	--volume /run/epilykos:/run/epilykos:ro \
+	--env EPILYKOS_CLOCK_FILE=/run/epilykos/clock.json \
+	--env TZ="${TZ}" \
+	--env TMPDIR=/tmp \
+	--env PORT="${PORT}" \
+	--env LOG_TO_FILE=false \
+	--env SQLITE_SYNCHRONOUS=FULL \
+	--env NODE_OPTIONS=--max-old-space-size=384 \
+	--health-cmd "node -e \"fetch('http://127.0.0.1:${PORT}/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))\"" \
+	--health-interval=30s \
+	--health-timeout=5s \
+	--health-retries=3 \
+	--health-start-period=180s
+
+if [ -n "${DIALOUT_GID}" ]; then
+	set -- "$@" --group-add "${DIALOUT_GID}"
+fi
+for dev in /dev/ttyUSB* /dev/ttyACM*; do
+	[ -e "${dev}" ] && set -- "$@" --device "${dev}"
+done
+
+exec podman run "$@" "${EPILYKOS_IMAGE_ID}"

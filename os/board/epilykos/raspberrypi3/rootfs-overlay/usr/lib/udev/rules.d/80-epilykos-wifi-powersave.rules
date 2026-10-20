@@ -1,0 +1,5 @@
+# Wi-Fi power saving off. On the Pi 3B (brcmfmac) it makes the box miss
+# broadcasts such as ARP requests, so other devices can lose it on the LAN
+# while it still reaches the router. Set once when the interface appears;
+# the kernel keeps it across the interface going down and up.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/sbin/iw dev $name set power_save off"

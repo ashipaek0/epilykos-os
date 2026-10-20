@@ -41,7 +41,7 @@ def contracts(reg):
     out = []
     for c in reg['contracts']:
         out.append(f"### {c['id']} — {c['title']}\n")
-        out.append(f"**Stage:** {c['stage']}  \n**Status:** `{c['status']}`\n")
+        out.append(f"**Stage:** {c['stage']}\n\n**Status:** `{c['status']}`\n")
         if c.get('rationale'):
             out.append(f"*Why:* {c['rationale']}\n")
         for key, title in LIST_SECTIONS:

@@ -1,13 +1,12 @@
 [Unit]
-Description=EpilykosOS: mark this boot good once the system is stable (C-BOOT-003)
-After=multi-user.target
-# Give services a little time to actually settle before judging the boot,
-# rather than marking good the instant multi-user.target is reached.
+Description=EpilykosOS: mark the booted slot good once healthy (C-BOOT-003)
+After=multi-user.target epilykos.service rauc.service
+RequiresMountsFor=/data
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sleep 60
-ExecStart=/usr/sbin/epilykos-mark-good
+ExecStart=/usr/bin/epilykos-mark-good
+TimeoutStartSec=30min
 
 [Install]
 WantedBy=multi-user.target

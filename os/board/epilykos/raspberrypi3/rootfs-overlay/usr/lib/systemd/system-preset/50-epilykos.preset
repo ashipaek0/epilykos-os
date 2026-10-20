@@ -1,0 +1,31 @@
+# Units EpilykosOS enables or keeps off. Buildroot runs `systemctl
+# preset-all` when it assembles the rootfs, so this file (and systemd's
+# 90-systemd.preset, which already enables networkd, resolved and
+# timesyncd) decides what is enabled; the first matching line wins.
+# systemd 258 ships no catch-all "disable *": a unit with an [Install]
+# section that no preset mentions is enabled, so anything that must stay
+# off is disabled here explicitly. CI checks the result in rootfs.ext4.
+enable epilykos-data-layout.service
+enable epilykos-data-grow.service
+enable epilykos-machine-id.service
+enable epilykos-zram.service
+enable epilykos-shadow.service
+enable epilykos-hostd.service
+enable epilykos-sshd.service
+enable epilykos.service
+enable epilykos-mark-good.service
+enable bluetooth.service
+enable rauc.service
+enable systemd-networkd.service
+enable systemd-resolved.service
+enable systemd-timesyncd.service
+# Console logins: the header serial port and the HDMI screen. SSH
+# (epilykos-sshd, above) only runs once turned on in Epilykos settings
+# (C-ACCESS-001); OpenSSH's stock sshd.service must stay off.
+disable sshd.service
+enable serial-getty@.service ttyS1
+enable getty@.service tty1
+# Wi-Fi and its setup paths (BOOT files, Bluetooth).
+enable iwd.service
+enable epilykos-wifi-import.service
+enable epilykos-improv.service

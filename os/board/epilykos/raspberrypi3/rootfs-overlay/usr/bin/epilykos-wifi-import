@@ -1,0 +1,174 @@
+#!/usr/bin/python3
+"""Import Wi-Fi settings left on the BOOT partition, then apply the Wi-Fi
+country. Runs on every boot, before iwd.
+
+Recognised files in the root of BOOT (any of them):
+  wifi.txt              EpilykosOS's own key=value file (see wifi-example.txt)
+  wpa_supplicant.conf   the classic Raspberry Pi headless file
+  firstrun.sh           Raspberry Pi Imager customisation ("systemd" format)
+  network-config        Raspberry Pi Imager customisation (cloud-init format)
+  rpi-preseed.toml      Raspberry Pi Imager customisation (newest format)
+
+Each network found becomes an iwd known network on DATA, and the file is
+deleted from BOOT afterwards so the password doesn't stay readable on the
+card. Imager's files are only read for their settings, never run.
+Passwords are never logged (C-PROV-002).
+
+SSH (C-ACCESS-001) can be turned on the same way: Imager's SSH settings in
+firstrun.sh (password or public keys for its user, applied to user
+epilykos), or an authorized_keys file in the root of BOOT.
+
+A forgotten dashboard password is replaced by dashboard-password.txt (the
+new password on its first line), read before Epilykos starts and deleted.
+"""
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_dashboard as dashboard  # noqa: E402
+import epilykos_ssh as ssh  # noqa: E402
+import epilykos_wifi as wifi  # noqa: E402
+
+BOOT = os.environ.get('EPILYKOS_BOOT_DIR', '/boot')
+
+
+def log(msg):
+    print(f'epilykos-wifi-import: {msg}', flush=True)
+
+
+def boot_rw(writable):
+    if os.environ.get('EPILYKOS_BOOT_DIR'):
+        return True  # tests point this at a plain directory
+    opt = 'remount,rw' if writable else 'remount,ro'
+    return subprocess.run(['mount', '-o', opt, BOOT]).returncode == 0
+
+
+def apply_ssh(source, pw_hash, keys):
+    for key in keys:
+        ssh.add_key(key)
+    if pw_hash:
+        ssh.set_password_hash(pw_hash)
+    if os.path.exists(os.path.join(ssh.RUN_DIR, 'shadow.base')):
+        ssh.write_shadow()
+    ssh.set_enabled(True)
+    log(f'{source}: SSH turned on for user {ssh.USER} ({len(keys)} key(s)'
+        f'{", password set" if pw_hash else ""})')
+
+
+def import_ssh_files():
+    """Before the Wi-Fi import, which deletes firstrun.sh."""
+    path = os.path.join(BOOT, 'firstrun.sh')
+    if os.path.isfile(path):
+        with open(path, 'rb') as f:
+            enabled, pw_hash, keys = ssh.parse_firstrun_ssh(wifi.decode_boot_file(f.read()))
+        if enabled and (pw_hash or keys):
+            apply_ssh('firstrun.sh', pw_hash, keys)
+        elif enabled:
+            log('firstrun.sh: asks for SSH but has no usable password or key; SSH stays off')
+    for name in ('authorized_keys', 'authorized_keys.txt'):
+        path = os.path.join(BOOT, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, 'rb') as f:
+            data = f.read()
+        try:
+            keys = ssh.parse_authorized_keys(wifi.decode_boot_file(data))
+        except ssh.SshError as e:
+            log(f'{name}: not imported ({e}); left in place')
+            continue
+        apply_ssh(name, None, keys)
+        if boot_rw(True):
+            try:
+                os.unlink(path)
+            finally:
+                boot_rw(False)
+
+
+def import_dashboard_password():
+    path = os.path.join(BOOT, dashboard.BOOT_FILE)
+    if not os.path.isfile(path):
+        return
+    with open(path, 'rb') as f:
+        data = f.read()
+    name = dashboard.BOOT_FILE
+    if wifi.is_blank(data):
+        log(f'{name}: not used (the file is empty; if it was just saved, the card may have been '
+            'removed before the computer finished writing it); left in place')
+        return
+    try:
+        dashboard.set_password(dashboard.parse_boot_file(wifi.decode_boot_file(data)))
+    except (dashboard.PasswordError, UnicodeError) as e:
+        log(f'{name}: not used ({e}); left in place')
+        return
+    log(f'{name}: dashboard password replaced')
+    if boot_rw(True):
+        try:
+            os.unlink(path)
+            log(f'removed {name} from BOOT')
+        finally:
+            boot_rw(False)
+
+
+def import_boot_files():
+    found = [(name, parse) for name, parse in wifi.BOOT_SOURCES
+             if os.path.isfile(os.path.join(BOOT, name))]
+    if not found:
+        return
+    consumed = []
+    for name, parse in found:
+        path = os.path.join(BOOT, name)
+        with open(path, 'rb') as f:
+            data = f.read()
+        if wifi.is_blank(data):
+            log(f'{name}: not imported (the file is empty; if it was just saved, the card '
+                'may have been removed before the computer finished writing it); left in place')
+            continue
+        try:
+            net = parse(wifi.decode_boot_file(data))
+        except (wifi.WifiError, ValueError, UnicodeError) as e:
+            log(f'{name}: not imported ({e}); left in place')
+            continue
+        consumed.append(name)
+        if net is None:
+            log(f'{name}: no Wi-Fi settings in it')
+            continue
+        wifi.write_iwd_network(net)
+        kind = 'open network' if not net.passphrase else 'password set'
+        log(f'{name}: added Wi-Fi network "{net.display_ssid}" ({kind}'
+            f'{", hidden" if net.hidden else ""})')
+        if net.country:
+            wifi.save_country(net.country)
+            log(f'{name}: Wi-Fi country {net.country}')
+
+    if consumed and boot_rw(True):
+        try:
+            for name in consumed:
+                os.unlink(os.path.join(BOOT, name))
+            log('removed ' + ', '.join(consumed) + ' from BOOT')
+        finally:
+            boot_rw(False)
+
+
+def apply_country():
+    country = wifi.load_country()
+    if not country or os.environ.get('EPILYKOS_BOOT_DIR'):
+        return
+    subprocess.run(['modprobe', 'cfg80211'], stderr=subprocess.DEVNULL)
+    r = subprocess.run(['iw', 'reg', 'set', country])
+    log(f'Wi-Fi country {country}' + ('' if r.returncode == 0 else ' could not be set'))
+
+
+def main():
+    if os.path.isdir(BOOT):
+        import_ssh_files()
+        import_dashboard_password()
+        import_boot_files()
+    else:
+        log(f'{BOOT} is not mounted; nothing to import')
+    apply_country()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

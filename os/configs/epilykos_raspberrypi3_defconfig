@@ -1,109 +1,179 @@
-# EpilykosOS — Raspberry Pi 3B (Tier 1, tested), armv7 32-bit.
+# EpilykosOS — Raspberry Pi 3B (Tier 1, tested), AArch64.
 #
-# STATUS: untested scaffold. Written against Buildroot 2024.02.x package
-# names/options from documentation, not verified with a real `make` run —
-# this repository has no access to Pi hardware or the multi-GB Buildroot/
-# toolchain/kernel downloads a build needs. Confirming this file actually
-# builds and boots (C-BOOT-000) is Stage 0 work still to do, on real
-# hardware, before D-BOOT-002 can be marked resolved.
+# Pinned Buildroot 2026.05.3. Every BR2_* symbol below was checked
+# against that release's Config.in files, not written from memory.
+#
+# 64-bit because the Epilykos application images are published for
+# linux/amd64 and linux/arm64 only — a 32-bit (armv7) userland cannot run
+# them. The Pi 3B's BCM2837 is a Cortex-A53 and boots AArch64 natively.
 #
 # Modeled on Home Assistant OS's approach (Buildroot + U-Boot + RAUC on
 # Pi 3/4/5), per D-PLATFORM-001 — not a fork of HAOS's tree, but the same
-# combination of upstream pieces, reused rather than reinvented.
+# combination of upstream pieces.
 
-BR2_arm=y
-BR2_cortex_a7=y
-BR2_ARM_ENABLE_NEON=y
-BR2_ARM_ENABLE_VFP=y
+BR2_aarch64=y
+BR2_cortex_a53=y
 
-BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+# Pinned explicitly: left to "same as kernel", a from-scratch build fell
+# back to headers far below the 6.6 kernel and failed Buildroot's
+# check-kernel-headers.sh.
+BR2_KERNEL_HEADERS_6_6=y
 
-# -- Kernel: mainline Raspberry Pi Foundation tree, its own bcm2709
-# defconfig (covers Pi 2/3) as the base, plus a small fragment for what
-# the appliance needs on top (overlayfs, RAUC's dm-verity-free needs,
-# cgroups for rootless Podman). The exact version is a build-system
-# maintenance question recorded by C-BOOT-000's evidence, not frozen here.
+# CI caches ~/.buildroot-ccache, Buildroot's default location.
+BR2_CCACHE=y
+
+# -- Kernel: mainline kernel.org, the arm64 "defconfig" (covers the
+# BCM2837) plus a fragment that trims unrelated SoC platforms and pins
+# what the appliance needs as built-ins. The upstream bcm2837-rpi-3-b
+# device tree already describes the onboard Bluetooth (serdev on the
+# PL011) and Wi-Fi (SDIO), so no out-of-tree DTS is needed.
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.6.31"
-BR2_LINUX_KERNEL_USE_DEFCONFIG=y
-BR2_LINUX_KERNEL_DEFCONFIG="bcm2709"
-BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="board/epilykos/raspberrypi3/linux.fragment"
+# arm64's default config is arch/arm64/configs/defconfig itself; the
+# "in-tree defconfig" option would look for defconfig_defconfig.
+BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG=y
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/linux.fragment"
+BR2_LINUX_KERNEL_IMAGE=y
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2837-rpi-3-b"
 BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 
-# -- Raspberry Pi firmware/GPU blobs (start.elf, config.txt base) --
+# -- Raspberry Pi firmware/GPU blobs (bootcode.bin, start.elf, fixup.dat).
+# VARIANT_PI covers the 0/1/2/3 family. BOOTCODE_BIN is its own toggle:
+# the Pi 3 loads its second stage from the SD card.
 BR2_PACKAGE_RPI_FIRMWARE=y
-BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI3=y
-BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="board/epilykos/raspberrypi3/config.txt"
+BR2_PACKAGE_RPI_FIRMWARE_BOOTCODE_BIN=y
+BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI=y
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/config.txt"
 
-# -- Bootloader: U-Boot, with RAUC's bootchooser env-var convention --
-# (BOOT_ORDER / BOOT_<slot>_LEFT — see os/board/epilykos/raspberrypi3/boot.cmd)
+# Onboard radio firmware: BCM43430A1.hcd (Bluetooth, loaded by the
+# kernel's hci_bcm driver) and the brcmfmac43430 Wi-Fi blobs.
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_BT=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_WIFI=y
+
+# -- Bootloader: U-Boot, upstream rpi_3_defconfig (the AArch64 Pi 3
+# target), with RAUC's bootchooser variables (see boot.cmd). The fragment
+# moves the environment from a file on the FAT partition to two raw,
+# redundant copies on the SD card ahead of the first partition, where
+# fw_setenv (and therefore RAUC) can reach it too.
 BR2_TARGET_UBOOT=y
-BR2_TARGET_UBOOT_BOARDNAME="rpi_3"
-BR2_TARGET_UBOOT_FORMAT_DTB_IMG=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2025.10"
+BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
+BR2_TARGET_UBOOT_USE_DEFCONFIG=y
+BR2_TARGET_UBOOT_BOARD_DEFCONFIG="rpi_3"
+BR2_TARGET_UBOOT_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/uboot.fragment"
+BR2_TARGET_UBOOT_FORMAT_BIN=y
 BR2_TARGET_UBOOT_NEEDS_DTC=y
 BR2_TARGET_UBOOT_NEEDS_OPENSSL=y
-BR2_TARGET_UBOOT_BOOT_SCRIPT=y
-BR2_TARGET_UBOOT_BOOT_SCRIPT_SOURCE="board/epilykos/raspberrypi3/boot.cmd"
-BR2_TARGET_UBOOT_ENVIMAGE=y
-BR2_TARGET_UBOOT_ENVIMAGE_SOURCE="board/epilykos/raspberrypi3/uboot.env"
-BR2_TARGET_UBOOT_ENVIMAGE_SIZE="0x4000"
+BR2_PACKAGE_HOST_UBOOT_TOOLS=y
+BR2_PACKAGE_HOST_UBOOT_TOOLS_BOOT_SCRIPT=y
+BR2_PACKAGE_HOST_UBOOT_TOOLS_BOOT_SCRIPT_SOURCE="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/boot.cmd"
+# fw_printenv/fw_setenv on the target: RAUC's uboot backend uses them.
+BR2_PACKAGE_UBOOT_TOOLS=y
+BR2_PACKAGE_UBOOT_TOOLS_FWPRINTENV=y
 
 # -- Init / OS base --
 BR2_INIT_SYSTEMD=y
 BR2_PACKAGE_SYSTEMD=y
-BR2_PACKAGE_SYSTEMD_JOURNAL_GATEWAY=n
 BR2_PACKAGE_SYSTEMD_NETWORKD=y
+BR2_PACKAGE_SYSTEMD_RESOLVED=y
 BR2_PACKAGE_SYSTEMD_TIMESYNCD=y
-BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
+# The mainline device tree routes the GPIO 14/15 header UART to the
+# mini-UART (serial1 → ttyS1); the PL011 belongs to the Bluetooth chip.
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS1"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
 BR2_TARGET_GENERIC_HOSTNAME="epilykos"
 BR2_TARGET_GENERIC_ISSUE="EpilykosOS"
+# Read-only root (C-BOOT-001): ROOT-A/B are never written in normal
+# operation, so cutting the power can't damage the OS. /var is a tmpfs
+# filled from a factory copy at boot; what must persist (journal,
+# Bluetooth pairings, last known time, Wi-Fi) is bind-mounted from DATA.
+# BR2_TARGET_GENERIC_REMOUNT_ROOTFS_RW is not set
+BR2_INIT_SYSTEMD_VAR_FACTORY=y
+# No root password is set: root can only log in on the local serial or
+# HDMI console, which already means physical access. A fixed password in
+# this file would be the same on every box and public, so it would add
+# nothing but the appearance of protection.
+
+# -- SSH maintenance login (C-ACCESS-001): off by default; turned on in
+# Epilykos settings (or by Raspberry Pi Imager / authorized_keys on BOOT)
+# for user epilykos with a password and/or keys, never for root.
+BR2_PACKAGE_OPENSSH=y
+BR2_PACKAGE_OPENSSH_SERVER=y
+BR2_PACKAGE_OPENSSH_KEY_UTILS=y
+# BR2_PACKAGE_OPENSSH_CLIENT is not set
+BR2_PACKAGE_SUDO=y
+BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/users.table"
 
 # -- A/B update mechanism (C-RELEASE-001, C-BOOT-002) --
 BR2_PACKAGE_RAUC=y
-BR2_PACKAGE_RAUC_SERVICE=y
+BR2_PACKAGE_RAUC_DBUS=y
 BR2_PACKAGE_DBUS=y
+
+# -- Bluetooth (C-RUNTIME-003) --
+# Host BlueZ; the epilykos container reaches it over the system D-Bus
+# (/run/dbus bind mount), so no BlueZ ships inside the container.
+# CLIENT adds bluetoothctl for checking the radio from the console.
+BR2_PACKAGE_BLUEZ5_UTILS=y
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
 
 # -- Filesystem tools the appliance needs at runtime --
 BR2_PACKAGE_DOSFSTOOLS=y
 BR2_PACKAGE_DOSFSTOOLS_MKFS_FAT=y
 BR2_PACKAGE_E2FSPROGS=y
 BR2_PACKAGE_E2FSPROGS_RESIZE2FS=y
-BR2_PACKAGE_E2FSPROGS_TUNE2FS=y
 BR2_PACKAGE_UTIL_LINUX=y
-BR2_PACKAGE_UTIL_LINUX_SFDISK=y
-BR2_PACKAGE_UTIL_LINUX_LIBBLKID=y
-BR2_PACKAGE_UTIL_LINUX_LIBUUID=y
+# BINARIES: sfdisk, blkid, lsblk, findmnt. PARTX: partx, used to tell the
+# kernel about DATA's new size on first boot.
+BR2_PACKAGE_UTIL_LINUX_BINARIES=y
+BR2_PACKAGE_UTIL_LINUX_PARTX=y
 
-# -- Rootless Podman host (C-RUNTIME-001) --
+# -- Podman host (C-RUNTIME-001) --
 BR2_PACKAGE_PODMAN=y
-BR2_PACKAGE_CONMON=y
 BR2_PACKAGE_CRUN=y
-BR2_PACKAGE_SLIRP4NETNS=y
 BR2_PACKAGE_FUSE_OVERLAYFS=y
 
-# -- Networking / provisioning (Stage 1, scaffolded early since it touches
-# the same base image) --
+# -- Application updates from Epilykos settings (C-UPDATE-002/004) --
+# The openssl tool verifies the Ed25519 manifest signature; Python's ssl
+# module and the CA bundle let hostd fetch the manifest and Podman pull
+# the image over HTTPS.
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_LIBOPENSSL=y
+BR2_PACKAGE_LIBOPENSSL_BIN=y
+BR2_PACKAGE_PYTHON3_SSL=y
+BR2_PACKAGE_CA_CERTIFICATES=y
+
+# -- Wi-Fi (C-PROV-001/002) --
+# iwd joins the networks; systemd-networkd configures the address (and
+# mDNS) the same way as on Ethernet. readline enables iwctl for the
+# console; iw and the regulatory database set the Wi-Fi country.
 BR2_PACKAGE_IWD=y
-BR2_PACKAGE_HOSTAPD=y
-BR2_PACKAGE_DNSMASQ=y
-BR2_PACKAGE_WPA_SUPPLICANT=n
+BR2_PACKAGE_READLINE=y
+BR2_PACKAGE_IW=y
+BR2_PACKAGE_WIRELESS_REGDB=y
+
+# -- Setup tools: Wi-Fi from files on BOOT (Raspberry Pi Imager or
+# wifi.txt) and Wi-Fi over Bluetooth LE (Improv), both small Python
+# programs; dbus-fast is the D-Bus library bleak uses.
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON_DBUS_FAST=y
 
 # -- Rootfs shape --
-# BOOT/ROOT-A/ROOT-B/DATA sizes are D-STORAGE-001 (still open) — the sizes
-# below are placeholders for `genimage.cfg`, not a frozen decision.
-BR2_ROOTFS_OVERLAY="board/epilykos/raspberrypi3/rootfs-overlay"
-BR2_ROOTFS_POST_BUILD_SCRIPT="board/epilykos/raspberrypi3/post-build.sh"
-BR2_ROOTFS_POST_IMAGE_SCRIPT="board/epilykos/raspberrypi3/post-image.sh"
+# BOOT/ROOT-A/ROOT-B/DATA sizes are D-STORAGE-001 (still open); see
+# genimage.cfg. 1536M per slot holds the base system plus the preloaded
+# Epilykos image archive (~290 MB) with room for growth.
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/rootfs-overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/post-image.sh"
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-BR2_TARGET_ROOTFS_EXT2_SIZE="768M"
-BR2_TARGET_ROOTFS_EXT2_LABEL="RootFS-A"
-BR2_TARGET_ROOTFS_EXT2_GEN2FS=n
-# tar image kept too, so genimage.cfg has a plain rootfs it can duplicate
-# into both the A and B slots at image-build time
-BR2_TARGET_ROOTFS_TAR=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="1536M"
+BR2_TARGET_ROOTFS_EXT2_LABEL="ROOT-A"
+
+# All site time zones, validated by hostd and passed as TZ to the app.
+BR2_TARGET_TZ_INFO=y
+BR2_TARGET_TZ_ZONELIST="default"

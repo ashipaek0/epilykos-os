@@ -1,0 +1,48 @@
+#!/bin/sh
+# Grow DATA (partition 4, the last one) and its ext4 filesystem to fill
+# the SD card. The image ships DATA as a small empty filesystem because
+# card sizes vary (D-STORAGE-001); this runs on every boot and does
+# nothing once DATA already reaches the end of the card.
+#
+# Runs before /data is mounted (epilykos-data-grow.service is ordered
+# Before=data.mount). Editing the partition table makes the kernel and
+# udev announce the partition again; with DATA mounted, systemd could see
+# its device vanish for a moment and stop data.mount and everything that
+# needs /data. Unmounted, there is nothing to stop, and the filesystem is
+# checked and grown offline.
+set -e
+
+# EPILYKOS_DATA_DEV: tests point this at a loop device partition.
+PART_DEV=$(readlink -f "${EPILYKOS_DATA_DEV:-/dev/disk/by-partuuid/45504c4b-04}")
+PART=$(basename "${PART_DEV}")
+DISK=$(basename "$(readlink -f "/sys/class/block/${PART}/..")")
+NUM=$(cat "/sys/class/block/${PART}/partition")
+
+if findmnt -n -S "${PART_DEV}" >/dev/null 2>&1; then
+	echo "epilykos-data-grow: /dev/${PART} is mounted; not growing it now" >&2
+	exit 0
+fi
+
+disk_end=$(cat "/sys/class/block/${DISK}/size")
+part_end=$(( $(cat "/sys/class/block/${PART}/start") + $(cat "/sys/class/block/${PART}/size") ))
+
+# Less than 16 MiB left over: already grown (or the card is that small).
+if [ $(( disk_end - part_end )) -gt 32768 ]; then
+	echo "epilykos-data-grow: growing /dev/${PART} to the end of /dev/${DISK}"
+	echo ", +" | sfdisk --no-reread --no-tell-kernel -N "${NUM}" "/dev/${DISK}"
+	partx -u -n "${NUM}" "/dev/${DISK}"
+	udevadm settle --timeout=30 || true
+fi
+
+# Grow the filesystem when it is more than 16 MiB smaller than the
+# partition: also finishes a grow interrupted after the partition step.
+part_bytes=$(blockdev --getsize64 "${PART_DEV}")
+fs_bytes=$(dumpe2fs -h "${PART_DEV}" 2>/dev/null | awk -F: '
+	/^Block count:/ { n = $2 } /^Block size:/ { s = $2 } END { printf "%.0f", n * s }')
+if [ $(( part_bytes - fs_bytes )) -gt 16777216 ]; then
+	echo "epilykos-data-grow: growing the filesystem on /dev/${PART}"
+	# resize2fs insists on a forced check of an unmounted filesystem;
+	# exit codes 1 and 2 mean errors were found and corrected.
+	e2fsck -f -p "${PART_DEV}" || [ $? -le 2 ]
+	resize2fs "${PART_DEV}"
+fi

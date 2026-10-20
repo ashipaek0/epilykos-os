@@ -32,12 +32,36 @@ boot or proof that malicious code obeys its own label.
 
 ## Rollout dependency
 
-The currently pinned app source predates the cooperating implementation. Do not
-edit the digest or bypass the check to make an image green. Merge/release the
-cooperating app, use the normal verified image-release bridge to produce its OS
-manifest PR, then pin that release. This gate intentionally blocks image builds
-using the old pinned app. OS PRs #45 and #48 are branch dependencies; no PR is
-merged or stable image published by this work.
+The cooperating app was released to `dev` on 2026-10-20 through app PR #187
+(including the prerequisite app PR #177). App commit
+`a35183cd57fa8260922e71ff1c566d5daccb3368` has exactly the source tree of the
+reviewed PR head `3304f787ee32d46b2548b9e117923453cf879751`.
+
+The normal verified release bridge merged OS PR #51. `manifests/dev.yaml`
+now pins `1.0.1-dev+a35183c`, sequence 12, to:
+
+```
+irunmole/epilykos@sha256:3fcffa0716c09b4e29b2413bfb3f12f8e5131cded75aef07ec87dd75001ef211
+```
+
+This is the multi-platform index digest recorded by the successful
+[app build](https://github.com/ashipaek0/Epilykos/actions/runs/39390628562),
+not a digest derived from a mutable tag. The source verifier authenticated it
+against that run's immutable `image-digest-epilykos` artifact (ID 12249636580).
+The [bridge](https://github.com/ashipaek0/epilykos-os/actions/runs/39391183511)
+and [signed publication](https://github.com/ashipaek0/epilykos-os/actions/runs/39391231742)
+both passed; the downloaded `app-dev` manifest signature was independently
+verified with `keys/app-manifest.pub`.
+
+Independent registry reads verified the SHA-256 chain from that index to its
+Linux/arm64 manifest and raw config. The actual config declares `flock-v1`,
+matches the CI commit/version/build identity, and passes
+`tools/check_app_compatibility.py`, producing image ID
+`1993d18ebdcfa23d9d0df176b759cfa9f8c67c0cb5c6fe33e1579d946587b9ae`.
+The compatibility branch includes this real pin. The legacy image remains
+incompatible; no gate exception was added. OS PRs #45 and #48 remain branch
+dependencies. This dev release does not promote stable or establish Pi boot
+acceptance.
 
 Existing DATA may carry promoted application state from an older OS. Adoption of
 that state still needs the OS update preflight in U02; it must not be treated as

@@ -44,9 +44,11 @@ grep -q '^@includedir /etc/sudoers.d' "${TARGET_DIR}/etc/sudoers" ||
 	echo '@includedir /etc/sudoers.d' >> "${TARGET_DIR}/etc/sudoers"
 chmod 0440 "${TARGET_DIR}/etc/sudoers.d/epilykos"
 
-# bluetooth.service asks for /etc/bluetooth as 0555 (ConfigurationDirectory);
-# the root is read-only, so systemd can't fix the mode at boot and warns.
-[ ! -d "${TARGET_DIR}/etc/bluetooth" ] || chmod 0555 "${TARGET_DIR}/etc/bluetooth"
+# Keep this owner-writable for Buildroot's unprivileged staging cleanup,
+# including rebuilds of a target previously set to 0555. The BlueZ drop-in
+# requests the same mode, so systemd need not chmod our read-only root.
+# Runtime write protection comes from the read-only root mount.
+[ ! -d "${TARGET_DIR}/etc/bluetooth" ] || chmod 0755 "${TARGET_DIR}/etc/bluetooth"
 
 # The clock never starts before this build: systemd moves it forward to
 # this file's time at boot. Without it a fresh card started at systemd's

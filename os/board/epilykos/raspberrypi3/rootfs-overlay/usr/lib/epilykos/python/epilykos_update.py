@@ -37,6 +37,8 @@ import threading
 import time
 import urllib.request
 
+import epilykos_maintenance as maintenance
+
 UPDATE_DIR = os.environ.get('EPILYKOS_UPDATE_DIR', '/data/epilykos/updater')
 IMAGE_ENV = os.environ.get('EPILYKOS_IMAGE_ENV', '/usr/lib/epilykos/image.env')
 PUBKEY = os.environ.get('EPILYKOS_APP_PUBKEY', '/usr/lib/epilykos/app-manifest.pub')
@@ -287,13 +289,25 @@ def apply(target='app', automatic=False, sequence=None, digest=None):
                 return {'ok': True, 'state': 'already-attempted'}
         if candidate['sequence'] <= floor() or candidate['digest'] == current().get('digest'):
             return {'ok': True, 'state': 'current'}
-        job = {'state': 'downloading', 'started_at': _now(), 'release': candidate['release'],
-               'sequence': candidate['sequence'], 'digest': candidate['digest']}
-        if automatic:
-            _write_json('auto-attempt.json', {'sequence': candidate['sequence'], 'digest': candidate['digest']})
-        _write_json('job.json', job)
-        _running.set()
-    threading.Thread(target=_run, args=(candidate, job), daemon=True).start()
+        try:
+            lease = maintenance.acquire()
+        except maintenance.MaintenanceError as e:
+            raise UpdateError(str(e)) from None
+        try:
+            job = {'state': 'downloading', 'started_at': _now(), 'release': candidate['release'],
+                   'sequence': candidate['sequence'], 'digest': candidate['digest']}
+            if automatic:
+                _write_json('auto-attempt.json', {'sequence': candidate['sequence'], 'digest': candidate['digest']})
+            _write_json('job.json', job)
+            _running.set()
+            threading.Thread(target=_run, args=(candidate, job, lease), daemon=True).start()
+        except BaseException:
+            _running.clear()
+            try:
+                _remove('job.json')
+            finally:
+                lease.close()
+            raise
     log(f'installing {candidate["release"]} (sequence {candidate["sequence"]})')
     return {'ok': True, 'state': 'applying', 'message': 'Downloading the update'}
 
@@ -307,10 +321,11 @@ def _restart_app():
     return r.returncode == 0
 
 
-def _run(candidate, job):
-    before = current()
+def _run(candidate, job, lease):
+    before = None
     started = False
     try:
+        before = current()
         ref = f'{REGISTRY}/{candidate["source"]}@{candidate["digest"]}'
         r = subprocess.run([PODMAN, 'pull', '--quiet', ref], capture_output=True, text=True, timeout=PULL_TIMEOUT_S)
         if r.returncode != 0:
@@ -346,16 +361,20 @@ def _run(candidate, job):
         log(f'update failed: {err}')
         rolled_back = False
         try:
-            _set_active(before)
-            rolled_back = _restart_app() if started else True  # nothing started: the old one never stopped
+            if before is not None:
+                _set_active(before)
+            rolled_back = _restart_app() if started else before is not None  # nothing started: the old one never stopped
         except Exception as e2:  # noqa: BLE001
             log(f'rollback failed: {e2}')
         _write_json('result.json', {'ok': False, 'error': err, 'rolled_back': rolled_back,
                                     'release': candidate['release'], 'finished_at': _now()})
     finally:
-        _remove('job.json')
-        _remove('verified.json')
-        _running.clear()
+        try:
+            _remove('job.json')
+            _remove('verified.json')
+        finally:
+            lease.close()
+            _running.clear()
 
 
 def recover():

@@ -20,6 +20,7 @@ test:
 	$(PYTHON) tools/test_wifi_provisioning.py
 	$(PYTHON) tools/test_host_actions.py
 	$(PYTHON) tools/check_rauc_conf.py
+	$(PYTHON) tools/test_shared_maintenance.py
 	$(PYTHON) tools/test_app_update.py
 	$(PYTHON) tools/test_os_version.py
 	$(PYTHON) tools/test_system_state.py

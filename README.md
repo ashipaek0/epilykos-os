@@ -1,6 +1,6 @@
 # EpilykosOS
 
-EpilykosOS turns a Raspberry Pi into an [Epilykos](https://github.com/ashipaek0/epilykos) energy monitor. Flash it to an SD card, power it on, and use the dashboard from any browser on your network.
+EpilykosOS is a dedicated operating system for running [Epilykos](https://github.com/ashipaek0/epilykos) on a Raspberry Pi. You flash it, power it on and finish setup from a browser. From then on it runs, updates and recovers by itself, like an appliance.
 
 ## Hardware
 

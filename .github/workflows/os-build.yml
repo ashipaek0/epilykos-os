@@ -14,7 +14,7 @@ name: OS image build
 # that's C-BOOT-000, and needs the real hardware this environment
 # doesn't have. The qemu-smoke-test job boots the image through U-Boot
 # under QEMU as a best-effort check; it is not a substitute for that
-# evidence.
+# evidence. Publication is gated by validation/build/artifact policy, not QEMU.
 
 on:
   workflow_dispatch:
@@ -60,7 +60,33 @@ env:
   EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      source_on_main: ${{ steps.source.outputs.on_main }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pyyaml==6.0.2 dbus-fast==4.0.4
+      - name: Required host and contract regressions
+        run: |
+          make test
+          make contracts
+      - name: Record stable-source ancestry
+        id: source
+        run: |
+          if git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo 'on_main=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'on_main=false' >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: validate
     if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
@@ -68,6 +94,9 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       is_new: ${{ steps.version.outputs.is_new }}
+      channel: ${{ env.EPILYKOS_CHANNEL }}
+      image_available: ${{ steps.image-artifact.outcome == 'success' }}
+      image_sha256: ${{ steps.compress.outputs.image_sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -251,13 +280,16 @@ jobs:
       # check above failed, so a two-hour build is never thrown away; the
       # job still fails in that case.
       - name: Compress image for upload
+        id: compress
         if: always() && steps.build.outcome == 'success'
         run: |
           IMAGES_DIR=$(dirname "$(find os/build -path '*/output/images/sdcard.img' -print -quit)")
           echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
           zstd -12 -T0 "${IMAGES_DIR}/sdcard.img" -o "${IMAGES_DIR}/sdcard.img.zst"
+          echo "image_sha256=$(sha256sum "${IMAGES_DIR}/sdcard.img.zst" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
+        id: image-artifact
         if: always() && steps.build.outcome == 'success'
         with:
           name: epilykos-${{ env.BOARD }}-sdcard
@@ -275,12 +307,36 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  pipeline-policy:
+    needs: [validate, build]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decision.outputs.publish }}
+      diagnose: ${{ steps.decision.outputs.diagnose }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Decide publication and diagnostic prerequisites
+        id: decision
+        env:
+          POLICY_VALIDATION: ${{ needs.validate.result }}
+          POLICY_BUILD: ${{ needs.build.result }}
+          POLICY_ARTIFACT: ${{ needs.build.outputs.image_available }}
+          POLICY_CHANNEL: ${{ needs.build.outputs.channel }}
+          POLICY_EVENT: ${{ github.event_name }}
+          POLICY_REF: ${{ github.ref }}
+          POLICY_NEW_VERSION: ${{ needs.build.outputs.is_new }}
+          POLICY_SOURCE_ON_MAIN: ${{ needs.validate.outputs.source_on_main }}
+          POLICY_IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
+          POLICY_IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+        run: |
+          python3 tools/image_release_policy.py | tee pipeline-policy.json
+          echo '### OS publication / diagnostic policy' >> "$GITHUB_STEP_SUMMARY"
+          cat pipeline-policy.json >> "$GITHUB_STEP_SUMMARY"
+
   qemu-smoke-test:
-    needs: build
-    # Also after a failed structural check (the image is uploaded whenever
-    # the build itself succeeded), or with the build skipped when testing
-    # an earlier run's image (image_from_run).
-    if: ${{ !cancelled() }}
+    needs: pipeline-policy
+    if: ${{ !cancelled() && needs.pipeline-policy.outputs.diagnose == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -295,7 +351,9 @@ jobs:
     # 2. Kernel: QEMU loads the image's own Image + DTB and boots
     #    root=PARTUUID=45504c4b-02 from the SD card, exactly the command
     #    line boot.scr builds. This checks the kernel, the root mount and
-    #    systemd bringing up the appliance's units, and must pass.
+    #    systemd bringing up the appliance's units. This remains diagnostic
+    #    until calibrated against known-good and deliberately broken images.
+    # Neither diagnostic success nor failure is a publication prerequisite.
     continue-on-error: true
     steps:
       - name: Install QEMU
@@ -337,7 +395,7 @@ jobs:
             echo "::warning::U-Boot under QEMU did not reach boot.scr (see the logs above); this needs the real Pi firmware"
           fi
 
-      - name: "Boot 2: kernel and root filesystem (gating)"
+      - name: "Boot 2: kernel and root filesystem (diagnostic)"
         run: |
           set +e
           # The command line boot.scr builds, plus the kernel log mirrored to
@@ -375,9 +433,21 @@ jobs:
           echo "$LOG" | grep -E "epilykos[a-z-]*\.service: Failed with result|Failed to start EpilykosOS" && { echo "::error::an EpilykosOS service failed"; fail=1; }
           exit $fail
 
+      - name: Preserve diagnostic emulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-qemu-diagnostics
+          path: |
+            uboot-uart*.log
+            kernel-uart*.log
+          retention-days: 14
+          if-no-files-found: warn
+
   # A new version of main, or a release you created: put the SD card image on
-  # its GitHub Release, only once the image built and booted under QEMU, so a
-  # failed build never uses up a number. Releases made with GITHUB_TOKEN do
+  # its GitHub Release only after required validation, build, structure and
+  # artifact policy pass. Diagnostic QEMU is independent. A failed build
+  # never uses up a number. Releases made with GITHUB_TOKEN do
   # not start this workflow again. Test builds (dev, branches) stay CI
   # artifacts only, kept 14 days.
   #
@@ -387,8 +457,8 @@ jobs:
   # newest release always has the same address:
   #   https://github.com/<owner>/<repo>/releases/latest/download/epilykos-os-imager.json
   release:
-    needs: [build, qemu-smoke-test]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.qemu-smoke-test.result == 'success' && (needs.build.outputs.is_new == 'true' || github.event_name == 'release') }}
+    needs: [build, pipeline-policy]
+    if: ${{ !cancelled() && needs.pipeline-policy.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -405,8 +475,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.build.outputs.tag }}
           VERSION: ${{ needs.build.outputs.version }}
+          IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
         run: |
           set -e
+          python3 tools/image_release_policy.py --verify-artifact artifact/sdcard.img.zst --sha256 "$IMAGE_SHA256"
           base="epilykos-os-v${VERSION}-${BOARD}.img"
           mv artifact/sdcard.img.zst "$base.zst"
           # Unpacked only to measure it: Imager checks the written size and SHA-256.

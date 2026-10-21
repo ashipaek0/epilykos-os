@@ -196,7 +196,9 @@ with tempfile.TemporaryDirectory() as d:
                EPILYKOS_SYSTEMCTL=str(fake), EPILYKOS_APP_GID=str(os.getgid()),
                EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1',
                EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'),
-               EPILYKOS_IW=str(d / 'iw'), EPILYKOS_MODPROBE='true', EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'data/wifi-country'))
+               EPILYKOS_IW=str(d / 'iw'), EPILYKOS_MODPROBE='true', EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'data/wifi-country'),
+               EPILYKOS_PROC_ROUTE=str(d / 'route'), EPILYKOS_SYS_NET=str(d / 'sys-net'))
+    (d / 'route').write_text('Iface\tDestination\tGateway\tFlags\nwlan0\t00000000\t0100A8C0\t0003\n')
     for zone in ('UTC', 'Africa/Lagos'):
         (d / 'zoneinfo' / zone).parent.mkdir(parents=True, exist_ok=True)
         (d / 'zoneinfo' / zone).write_bytes(b'TZif2 test zone')
@@ -221,7 +223,9 @@ with tempfile.TemporaryDirectory() as d:
         st = call({'action': 'status'})
         assert st['ok'] and st['appliance'] and st['ssh'] == {'enabled': False, 'password_set': False, 'keys': [],
                                                              'user': 'epilykos'} and st['wifi_setup_until'] == 0, st
-        ok('hostd status: SSH off, no password, no keys, no Wi-Fi setup window')
+        assert st['network'] == {'gateway': '192.168.0.1', 'gateway_interface': 'wlan0', 'wifi': None,
+                                 'wifi_country': None, 'wifi_country_source': None}, st['network']
+        ok('hostd status: SSH off, no password, no keys, no Wi-Fi setup window; network (gateway, no Wi-Fi)')
 
         r = call({'action': 'wifi_setup'})
         assert r['ok'] and r['wifi_setup_until'] > time.time() + 890

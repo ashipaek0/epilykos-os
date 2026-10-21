@@ -8,7 +8,7 @@ Listens on /run/epilykos-host/host.sock, which only root and the
 container's app user (gid 1000) can open; the container sees the same
 directory. One JSON request per line, one JSON reply per line:
 
-    {"action": "status"}                        also the clock and the SD card size
+    {"action": "status"}                        also the clock, SD card size and network
     {"action": "restart"} | {"action": "shutdown"}
     {"action": "wifi_setup"}                    open Bluetooth Wi-Fi setup for 15 min
     {"action": "ssh_enable"} | {"action": "ssh_disable"}
@@ -43,6 +43,7 @@ import time
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_bluetooth as bluetooth  # noqa: E402
+import epilykos_netinfo as netinfo  # noqa: E402
 import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_system as system  # noqa: E402
@@ -92,6 +93,14 @@ def later(fn, delay=1.0):
     threading.Timer(delay, fn).start()
 
 
+def network_status():
+    try:
+        return netinfo.status(system.timezone())
+    except Exception as e:  # noqa: BLE001 - status still answers without it
+        log(f'network status: {type(e).__name__}')
+        return None
+
+
 def handle(req):
     action = req.get('action')
     if action in BLUETOOTH_ACTIONS:
@@ -99,7 +108,7 @@ def handle(req):
     if action == 'status':
         return {'ok': True, 'appliance': True, 'os_version': os_version(),
                 'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status(), 'port': port.read(),
-                'clock': system.clock(), 'storage': system.storage()}
+                'clock': system.clock(), 'storage': system.storage(), 'network': network_status()}
     if action == 'set_timezone':
         # The app gets TZ when its container starts (epilykos-run), so a new
         # zone needs a restart; the same zone again does not.

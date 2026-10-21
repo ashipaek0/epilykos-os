@@ -305,7 +305,6 @@ async def main():
     assert caps & improv.CAP_SCAN and caps & improv.CAP_DEVICE_INFO
 
     # A wrong password: back to authorized, "unable to connect", no network left behind.
-    regs = advm.registrations
     await write(wifi_packet('Bad Net', SECRET))
     await wait_for(lambda: _eq(read('char1'), [improv.ERROR_UNABLE_TO_CONNECT]), 'unable-to-connect error')
     assert (await read('char0')) == bytes([improv.STATE_AUTHORIZED])
@@ -326,13 +325,19 @@ async def main():
     ok('failed join on a known network: its previous settings are put back')
 
     # The real thing, sent in 20-byte chunks like a small-MTU client.
+    regs = advm.registrations
     await write(wifi_packet('Home Net', SECRET))
     await wait_for(lambda: _eq(read('char0'), [improv.STATE_PROVISIONED]), 'provisioned state')
     result = await read('char3')
     assert result[0] == 1 and result[3:3 + result[2]] == b'http://192.0.2.10:3000/', result
     assert improv.wifi.configured_networks(IWD_DIR) == ['Home Net.psk']
+    # Re-advertising runs in the background after the state change (one
+    # re-registration per change, queued behind the advertising lock).
+    async def advertised_provisioned():
+        adv = advm.active.get(improv.ADV_PATH)
+        return bool(adv) and adv['ServiceData'].value[improv.SERVICE_DATA_UUID].value[0] == improv.STATE_PROVISIONED
+    await wait_for(advertised_provisioned, 'provisioned state re-advertised')
     assert advm.registrations > regs, 'state change must re-advertise'
-    assert advm.active[improv.ADV_PATH]['ServiceData'].value[improv.SERVICE_DATA_UUID].value[0] == improv.STATE_PROVISIONED
     ok('join: provisioned, redirect URL to the dashboard, known network on DATA, re-advertised')
 
     service.started -= improv.SETUP_WINDOW_S + 1

@@ -140,6 +140,7 @@ class FakeAdvertisingManager(ServiceInterface):
         self.active, self.registrations = {}, 0
         self.max_ads, self.refuse = 5, False  # refuse: slots stuck, as seen on a Pi 3B
         self.unregister_delays = []  # seconds, consumed one per UnregisterAdvertisement
+        self.register_delays = []  # seconds, consumed one per RegisterAdvertisement, after it reads the data
 
     @method()
     async def RegisterAdvertisement(self, adv: 'o', options: 'a{sv}'):
@@ -153,6 +154,8 @@ class FakeAdvertisingManager(ServiceInterface):
                                             interface='org.freedesktop.DBus.Properties', member='GetAll',
                                             signature='s', body=['org.bluez.LEAdvertisement1']))
         props = reply.body[0]
+        if self.register_delays:
+            await asyncio.sleep(self.register_delays.pop(0))
         if adv_length(props) > 31:
             raise DBusError('org.bluez.Error.InvalidLength', 'Advertising data too long')
         self.active[adv] = props
@@ -326,6 +329,9 @@ async def main():
 
     # The real thing, sent in 20-byte chunks like a small-MTU client.
     regs = advm.registrations
+    # bluetoothd slow to finish the re-advertisement for "provisioning": the
+    # join completes meanwhile, and "provisioned" must still be advertised.
+    advm.register_delays = [0.5]
     await write(wifi_packet('Home Net', SECRET))
     await wait_for(lambda: _eq(read('char0'), [improv.STATE_PROVISIONED]), 'provisioned state')
     result = await read('char3')

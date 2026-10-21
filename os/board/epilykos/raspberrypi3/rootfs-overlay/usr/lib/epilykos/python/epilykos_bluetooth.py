@@ -5,10 +5,12 @@ system default agent. Only Pair calls from this connection use this agent.
 PINs live only in the pending future and are never stored or logged.
 """
 import asyncio
+import os
 import re
 import threading
 import time
 import uuid
+
 from dbus_fast import BusType, DBusError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method
@@ -16,10 +18,20 @@ from dbus_fast.service import ServiceInterface, method
 BLUEZ = 'org.bluez'
 AGENT = '/org/epilykos/PairingAgent'
 WINDOW_S = 300
+# Tests run against a fake BlueZ on a private session bus.
+BUS_TYPE = BusType.SESSION if os.environ.get('EPILYKOS_BLUEZ_BUS') == 'session' else BusType.SYSTEM
 
 
 class PairingError(ValueError):
     pass
+
+
+async def bluez_owner(bus):
+    """bluetoothd's unique bus name, or None while it is not running."""
+    reply = await asyncio.wait_for(bus.call(Message(destination='org.freedesktop.DBus', path='/org/freedesktop/DBus',
+                                                    interface='org.freedesktop.DBus', member='GetNameOwner',
+                                                    signature='s', body=[BLUEZ])), 8)
+    return reply.body[0] if reply.message_type == MessageType.METHOD_RETURN else None
 
 
 async def call(bus, path, interface, member, signature='', body=()):
@@ -158,9 +170,10 @@ class Pairing:
         self.selected = None
         if self.adapter:
             # Adapter's own timeout is a second guard if hostd crashes.
-            await self.prop('Pairable', Variant('b', False))
+            try: await self.prop('Pairable', Variant('b', False))
+            except (DBusError, asyncio.TimeoutError): pass  # adapter gone; PairableTimeout still ends it
             try: await call(self.bus, self.adapter, 'org.bluez.Adapter1', 'StopDiscovery')
-            except DBusError: pass  # no discovery session on this connection
+            except (DBusError, asyncio.TimeoutError): pass  # no discovery session on this connection
 
     async def pair(self, address):
         if not self.active():
@@ -188,6 +201,13 @@ class Pairing:
                        interface='org.bluez.Device1', member='Pair')), min(120, max(0, self.deadline-time.monotonic())))
             if reply.message_type == MessageType.ERROR:
                 raise DBusError(reply.error_name, reply.body[0] if reply.body else '')
+            # Trusted: it reconnects later without asking an agent, as
+            # `bluetoothctl trust` would; this one only answers in the window.
+            try:
+                await call(self.bus, device, 'org.freedesktop.DBus.Properties', 'Set', 'ssv',
+                           ('org.bluez.Device1', 'Trusted', Variant('b', True)))
+            except (DBusError, asyncio.TimeoutError):
+                pass  # paired all the same
             self.result = {'ok': True, 'message': 'Paired. Select this device in your source settings.'}
         except asyncio.CancelledError:
             self.result = {'ok': False, 'message': 'Pairing cancelled'}
@@ -241,7 +261,7 @@ _manager = None
 
 def start():
     def thread():
-        global _loop, _manager
+        global _loop
         _loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_loop)
 
@@ -250,14 +270,19 @@ def start():
             while True:
                 bus = None
                 try:
-                    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+                    bus = await MessageBus(bus_type=BUS_TYPE).connect()
+                    owner = await bluez_owner(bus)
                     manager = Pairing(bus)
                     await manager.init()
                     _manager = manager
-                    while bus.connected:
+                    # A bluetoothd restart (epilykos-improv restarts it to free stuck
+                    # advertising slots) drops our agent registration: start over.
+                    while bus.connected and await bluez_owner(bus) == owner:
                         if manager.until and not manager.active():
                             await manager.close()
                         await asyncio.sleep(1)
+                    if bus.connected:
+                        print('epilykos-hostd: bluetoothd restarted; registering the pairing agent again', flush=True)
                 except Exception as e:
                     print(f'epilykos-hostd: Bluetooth pairing unavailable ({type(e).__name__})', flush=True)
                 finally:

@@ -87,23 +87,13 @@ def iwd_file_content(net: WifiNetwork) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def write_iwd_network(net: WifiNetwork, iwd_dir: str = None) -> str:
-    """Write (or replace) the known-network file for NET. Returns its path."""
-    net.validate()
-    iwd_dir = iwd_dir or IWD_DIR
+def _write_file(iwd_dir: str, name: str, text: str) -> str:
     os.makedirs(iwd_dir, mode=0o700, exist_ok=True)
-    name = iwd_file_name(net.ssid, open_network=not net.passphrase)
-    # A network can only be one type; drop a stale file of the other one.
-    other = iwd_file_name(net.ssid, open_network=bool(net.passphrase))
-    try:
-        os.unlink(os.path.join(iwd_dir, other))
-    except FileNotFoundError:
-        pass
     path = os.path.join(iwd_dir, name)
     fd, tmp = tempfile.mkstemp(dir=iwd_dir, prefix='.epilykos-')
     try:
         with os.fdopen(fd, 'w') as f:
-            f.write(iwd_file_content(net))
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
@@ -117,6 +107,19 @@ def write_iwd_network(net: WifiNetwork, iwd_dir: str = None) -> str:
     return path
 
 
+def write_iwd_network(net: WifiNetwork, iwd_dir: str = None) -> str:
+    """Write (or replace) the known-network file for NET. Returns its path."""
+    net.validate()
+    iwd_dir = iwd_dir or IWD_DIR
+    # A network can only be one type; drop a stale file of the other one.
+    other = iwd_file_name(net.ssid, open_network=bool(net.passphrase))
+    try:
+        os.unlink(os.path.join(iwd_dir, other))
+    except FileNotFoundError:
+        pass
+    return _write_file(iwd_dir, iwd_file_name(net.ssid, open_network=not net.passphrase), iwd_file_content(net))
+
+
 def remove_iwd_network(ssid: bytes, iwd_dir: str = None):
     iwd_dir = iwd_dir or IWD_DIR
     for open_network in (False, True):
@@ -124,6 +127,30 @@ def remove_iwd_network(ssid: bytes, iwd_dir: str = None):
             os.unlink(os.path.join(iwd_dir, iwd_file_name(ssid, open_network)))
         except FileNotFoundError:
             pass
+
+
+def saved_network(ssid: bytes, iwd_dir: str = None) -> dict:
+    """SSID's known-network files as they are now ({name: text}; empty when
+    it is not known), for restore_network to put back."""
+    iwd_dir = iwd_dir or IWD_DIR
+    saved = {}
+    for open_network in (False, True):
+        name = iwd_file_name(ssid, open_network)
+        try:
+            with open(os.path.join(iwd_dir, name)) as f:
+                saved[name] = f.read()
+        except FileNotFoundError:
+            pass
+    return saved
+
+
+def restore_network(ssid: bytes, saved: dict, iwd_dir: str = None):
+    """Put SSID back the way saved_network found it: a failed attempt with
+    a mistyped password must not lose the settings that worked."""
+    iwd_dir = iwd_dir or IWD_DIR
+    remove_iwd_network(ssid, iwd_dir)
+    for name, text in saved.items():
+        _write_file(iwd_dir, name, text)
 
 
 def configured_networks(iwd_dir: str = None):
@@ -375,7 +402,10 @@ def parse_preseed_toml(text: str):
     if not wlan:
         return None
     if wlan.get('ssid_hex'):
-        ssid = bytes.fromhex(wlan['ssid_hex'])
+        try:
+            ssid = bytes.fromhex(str(wlan['ssid_hex']))
+        except ValueError:
+            raise WifiError('unreadable ssid_hex in rpi-preseed.toml') from None
     else:
         ssid = str(wlan.get('ssid', '')).encode('utf-8')
     return WifiNetwork(ssid=ssid, passphrase=str(wlan.get('password', '')),

@@ -566,9 +566,10 @@ class Improv:
             return
         self.set_state(STATE_PROVISIONING)
         log(f'joining Wi-Fi network "{net.display_ssid}"')
-        wifi.write_iwd_network(net)
-        ip = None
+        ip, previous = None, None
         try:
+            previous = wifi.saved_network(ssid)
+            wifi.write_iwd_network(net)
             station, ifname = await self.iwd.station()
             if not station:
                 raise DBusError('net.connman.iwd.NotFound', 'no Wi-Fi interface')
@@ -580,8 +581,14 @@ class Improv:
                 await asyncio.sleep(0.5)
         except (DBusError, asyncio.TimeoutError) as e:
             log(f'could not join "{net.display_ssid}": {getattr(e, "type", "")} {e}')
+        except Exception as e:  # noqa: BLE001 - never leave the phone waiting on "provisioning"
+            log(f'could not join "{net.display_ssid}": {type(e).__name__}')
         if not ip:
-            wifi.remove_iwd_network(ssid)
+            if previous is not None:
+                try:
+                    wifi.restore_network(ssid, previous)
+                except OSError as e:
+                    log(f'could not restore the previous settings for "{net.display_ssid}": {e.strerror or e}')
             self.set_error(ERROR_UNABLE_TO_CONNECT)
             self.set_state(STATE_AUTHORIZED)
             return
@@ -655,9 +662,9 @@ class Improv:
             await self.advertise(want)
             self.adv_failures = 0
             return
-        except DBusError as e:
+        except (DBusError, asyncio.TimeoutError) as e:
             self.adv_failures += 1
-            log(f'advertising: {e}')
+            log(f'advertising: {e or type(e).__name__}')
         if self.adv_failures < ADV_FAILURES_BEFORE_RESET:
             return
         try:

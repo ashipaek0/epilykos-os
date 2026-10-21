@@ -312,6 +312,19 @@ async def main():
     assert improv.wifi.configured_networks(IWD_DIR) == []
     ok('failed join: error 0x03, state back to authorized, credentials removed')
 
+    # A failed attempt on a network the box already knows (a mistyped
+    # password) keeps the settings that worked.
+    known = improv.wifi.write_iwd_network(improv.wifi.WifiNetwork(ssid=b'Bad Net', passphrase='the old password'), IWD_DIR)
+    with open(known) as f:
+        before = f.read()
+    await write(wifi_packet('Bad Net', SECRET))
+    await wait_for(lambda: _eq(read('char1'), [improv.ERROR_UNABLE_TO_CONNECT]), 'unable-to-connect error')
+    assert (await read('char0')) == bytes([improv.STATE_AUTHORIZED])
+    with open(known) as f:
+        assert f.read() == before
+    os.unlink(known)
+    ok('failed join on a known network: its previous settings are put back')
+
     # The real thing, sent in 20-byte chunks like a small-MTU client.
     await write(wifi_packet('Home Net', SECRET))
     await wait_for(lambda: _eq(read('char0'), [improv.STATE_PROVISIONED]), 'provisioned state')

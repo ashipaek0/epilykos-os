@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """SD-card sizing and timezone/clock interface without changing the test host."""
-import importlib.util
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -27,6 +25,7 @@ with tempfile.TemporaryDirectory() as temp:
     dev=d/'devices/mmcblk0';part=dev/'mmcblk0p4';part.mkdir(parents=True);(part/'partition').write_text('4')
     s.SYS.mkdir();(s.SYS/'mmcblk0p4').symlink_to(part)
     (dev/'size').write_text(str(16_000_000_000//512));assert s.storage('/dev/mmcblk0p4')['undersized']
-    (dev/'size').write_text(str(31_900_000_000//512));assert not s.storage('/dev/mmcblk0p4')['undersized']
+    for marketed_32gb in (31_900_000_000, 31_116_288_000, 30_543_970_304, 29_850_000_000):
+        (dev/'size').write_text(str(marketed_32gb//512));assert not s.storage('/dev/mmcblk0p4')['undersized'], marketed_32gb
     assert s.storage('/dev/not-here') is None
 print('PASS system state: timezone persistence/path validation, clock JSON, card backing device and marketed 32 GB tolerance')

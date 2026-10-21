@@ -5,14 +5,15 @@ system default agent. Only Pair calls from this connection use this agent.
 PINs live only in the pending future and are never stored or logged.
 """
 import asyncio
+import os
 import re
 import threading
 import time
 import uuid
+
 from dbus_fast import BusType, DBusError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method
-import os
 
 BLUEZ = 'org.bluez'
 AGENT = '/org/epilykos/PairingAgent'
@@ -169,9 +170,10 @@ class Pairing:
         self.selected = None
         if self.adapter:
             # Adapter's own timeout is a second guard if hostd crashes.
-            await self.prop('Pairable', Variant('b', False))
+            try: await self.prop('Pairable', Variant('b', False))
+            except (DBusError, asyncio.TimeoutError): pass  # adapter gone; PairableTimeout still ends it
             try: await call(self.bus, self.adapter, 'org.bluez.Adapter1', 'StopDiscovery')
-            except DBusError: pass  # no discovery session on this connection
+            except (DBusError, asyncio.TimeoutError): pass  # no discovery session on this connection
 
     async def pair(self, address):
         if not self.active():
@@ -199,6 +201,13 @@ class Pairing:
                        interface='org.bluez.Device1', member='Pair')), min(120, max(0, self.deadline-time.monotonic())))
             if reply.message_type == MessageType.ERROR:
                 raise DBusError(reply.error_name, reply.body[0] if reply.body else '')
+            # Trusted: it reconnects later without asking an agent, as
+            # `bluetoothctl trust` would; this one only answers in the window.
+            try:
+                await call(self.bus, device, 'org.freedesktop.DBus.Properties', 'Set', 'ssv',
+                           ('org.bluez.Device1', 'Trusted', Variant('b', True)))
+            except (DBusError, asyncio.TimeoutError):
+                pass  # paired all the same
             self.result = {'ok': True, 'message': 'Paired. Select this device in your source settings.'}
         except asyncio.CancelledError:
             self.result = {'ok': False, 'message': 'Pairing cancelled'}
@@ -252,7 +261,7 @@ _manager = None
 
 def start():
     def thread():
-        global _loop, _manager
+        global _loop
         _loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_loop)
 

@@ -194,7 +194,11 @@ with tempfile.TemporaryDirectory() as d:
     fake.chmod(0o755)
     env = dict(os.environ, EPILYKOS_HOST_SOCKET=str(sock), EPILYKOS_RUN_DIR=str(run), EPILYKOS_SSH_DIR=str(sshdir),
                EPILYKOS_SYSTEMCTL=str(fake), EPILYKOS_APP_GID=str(os.getgid()),
-               EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
+               EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1',
+               EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'))
+    for zone in ('UTC', 'Africa/Lagos'):
+        (d / 'zoneinfo' / zone).parent.mkdir(parents=True, exist_ok=True)
+        (d / 'zoneinfo' / zone).write_bytes(b'TZif2 test zone')
     proc = subprocess.Popen([sys.executable, str(OVERLAY / 'usr/bin/epilykos-hostd')], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
@@ -265,6 +269,19 @@ with tempfile.TemporaryDirectory() as d:
         time.sleep(1.5)
         assert calls.read_text().splitlines().count('--no-block restart epilykos.service') == 1
         ok('hostd set_port: saved on DATA, Epilykos restarted once; bad, reserved and busy ports refused')
+
+        assert call({'action': 'status'})['clock']['timezone'] == 'UTC'
+        assert call({'action': 'set_timezone', 'timezone': 'UTC'}) == {'ok': True, 'timezone': 'UTC', 'restart_required': False}
+        r = call({'action': 'set_timezone', 'timezone': 'Africa/Lagos'})
+        assert r == {'ok': True, 'timezone': 'Africa/Lagos', 'restart_required': True}, r
+        assert call({'action': 'set_timezone', 'timezone': 'Africa/Lagos'})['restart_required'] is False
+        for bad in ('../../etc/passwd', 'Mars/Olympus', 7):
+            assert not call({'action': 'set_timezone', 'timezone': bad})['ok'], bad
+        assert call({'action': 'status'})['clock']['timezone'] == 'Africa/Lagos'
+        assert json.loads((run / 'clock.json').read_text())['timezone'] == 'Africa/Lagos'
+        time.sleep(3.5)
+        assert calls.read_text().splitlines().count('--no-block restart epilykos.service') == 2
+        ok('hostd set_timezone: saved, clock state updated, Epilykos restarted only when the zone changes')
 
         assert call({'action': 'rm -rf /'}) == {'ok': False, 'error': 'unknown action'}
         assert call(None, raw=b'not json\n') == {'ok': False, 'error': 'malformed request'}

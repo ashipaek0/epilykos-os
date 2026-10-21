@@ -4,7 +4,6 @@ main, a release made by hand on GitHub sets a new starting point, changes
 outside the image keep the version, other tags (app-dev) are ignored, and
 post-build.sh writes the version CI chose into image.env."""
 import json
-import os
 import subprocess
 import sys
 import tempfile

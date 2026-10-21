@@ -26,4 +26,5 @@ test:
 	$(PYTHON) tools/test_os_version.py
 	$(PYTHON) tools/test_system_state.py
 	$(PYTHON) tools/test_bluetooth_pairing.py
+	$(PYTHON) tools/test_improv_dbus.py
 	$(PYTHON) tools/test_verify_app_release.py

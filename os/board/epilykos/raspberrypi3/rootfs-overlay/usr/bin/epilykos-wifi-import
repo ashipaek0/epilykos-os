@@ -28,6 +28,7 @@ import sys
 sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_dashboard as dashboard  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
+import epilykos_system as system  # noqa: E402
 import epilykos_wifi as wifi  # noqa: E402
 
 BOOT = os.environ.get('EPILYKOS_BOOT_DIR', '/boot')
@@ -151,12 +152,16 @@ def import_boot_files():
 
 
 def apply_country():
-    country = wifi.load_country()
-    if not country or os.environ.get('EPILYKOS_BOOT_DIR'):
-        return
-    subprocess.run(['modprobe', 'cfg80211'], stderr=subprocess.DEVNULL)
-    r = subprocess.run(['iw', 'reg', 'set', country])
-    log(f'Wi-Fi country {country}' + ('' if r.returncode == 0 else ' could not be set'))
+    """The Wi-Fi settings' country, or else the site time zone's (routers
+    on channels 12-13 need it). Applied again when wlan0 appears
+    (epilykos-wifi-country) and when the time zone changes (hostd)."""
+    if os.environ.get('EPILYKOS_BOOT_DIR') and not os.environ.get('EPILYKOS_IW'):
+        return  # tests point BOOT at a plain directory and bring no fake iw
+    country, source, ok = wifi.apply_country(system.timezone())
+    if country:
+        log(f'Wi-Fi country {country} (from the {source})' + ('' if ok else ' could not be set'))
+    else:
+        log('no Wi-Fi country set and none from the time zone; using the world rules (channels 12-13 listen-only)')
 
 
 def main():

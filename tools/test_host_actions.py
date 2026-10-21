@@ -195,10 +195,16 @@ with tempfile.TemporaryDirectory() as d:
     env = dict(os.environ, EPILYKOS_HOST_SOCKET=str(sock), EPILYKOS_RUN_DIR=str(run), EPILYKOS_SSH_DIR=str(sshdir),
                EPILYKOS_SYSTEMCTL=str(fake), EPILYKOS_APP_GID=str(os.getgid()),
                EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1',
-               EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'))
+               EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'),
+               EPILYKOS_IW=str(d / 'iw'), EPILYKOS_MODPROBE='true', EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'data/wifi-country'),
+               EPILYKOS_PROC_ROUTE=str(d / 'route'), EPILYKOS_SYS_NET=str(d / 'sys-net'))
+    (d / 'route').write_text('Iface\tDestination\tGateway\tFlags\nwlan0\t00000000\t0100A8C0\t0003\n')
     for zone in ('UTC', 'Africa/Lagos'):
         (d / 'zoneinfo' / zone).parent.mkdir(parents=True, exist_ok=True)
         (d / 'zoneinfo' / zone).write_bytes(b'TZif2 test zone')
+    (d / 'zoneinfo/zone.tab').write_text('NG\t+0627+00324\tAfrica/Lagos\n')
+    (d / 'iw').write_text(f'#!/bin/sh\necho "$@" >> {d / "iw-calls"}\n')
+    (d / 'iw').chmod(0o755)
     proc = subprocess.Popen([sys.executable, str(OVERLAY / 'usr/bin/epilykos-hostd')], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
@@ -217,7 +223,9 @@ with tempfile.TemporaryDirectory() as d:
         st = call({'action': 'status'})
         assert st['ok'] and st['appliance'] and st['ssh'] == {'enabled': False, 'password_set': False, 'keys': [],
                                                              'user': 'epilykos'} and st['wifi_setup_until'] == 0, st
-        ok('hostd status: SSH off, no password, no keys, no Wi-Fi setup window')
+        assert st['network'] == {'gateway': '192.168.0.1', 'gateway_interface': 'wlan0', 'wifi': None,
+                                 'wifi_country': None, 'wifi_country_source': None}, st['network']
+        ok('hostd status: SSH off, no password, no keys, no Wi-Fi setup window; network (gateway, no Wi-Fi)')
 
         r = call({'action': 'wifi_setup'})
         assert r['ok'] and r['wifi_setup_until'] > time.time() + 890
@@ -281,7 +289,8 @@ with tempfile.TemporaryDirectory() as d:
         assert json.loads((run / 'clock.json').read_text())['timezone'] == 'Africa/Lagos'
         time.sleep(3.5)
         assert calls.read_text().splitlines().count('--no-block restart epilykos.service') == 2
-        ok('hostd set_timezone: saved, clock state updated, Epilykos restarted only when the zone changes')
+        assert (d / 'iw-calls').read_text().splitlines() == ['reg set NG'], 'the Wi-Fi country follows the new zone, once'
+        ok('hostd set_timezone: saved, clock state updated, Wi-Fi country set, Epilykos restarted only when the zone changes')
 
         assert call({'action': 'rm -rf /'}) == {'ok': False, 'error': 'unknown action'}
         assert call(None, raw=b'not json\n') == {'ok': False, 'error': 'malformed request'}

@@ -24,6 +24,8 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 
 **Forgot the dashboard password?** Put a file named `dashboard-password.txt` with the new password on its first line on the SD card's boot drive, then start the Pi. The file is deleted once it is used. With a keyboard and screen, `epilykos-reset-password` does the same.
 
+**Box can't find your Wi-Fi network?** A Raspberry Pi 3B only sees 2.4 GHz networks, and only sees a router on channel 12 or 13 once it knows its country. It takes the country from the time zone chosen in Epilykos setup; for the very first setup, put `country=` in wifi.txt or choose the Wi-Fi country in Raspberry Pi Imager.
+
 **Wi-Fi setup not showing on improv-wifi.com?** Use "Change Wi-Fi" in Settings → Network, and don't pair the Pi in your computer's Bluetooth menu: setup doesn't need it.
 
 ## What it does

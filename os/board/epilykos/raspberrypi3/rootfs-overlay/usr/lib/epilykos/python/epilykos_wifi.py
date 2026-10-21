@@ -9,11 +9,15 @@ error messages never include one.
 """
 import os
 import re
+import subprocess
 import tempfile
 from dataclasses import dataclass
 
 IWD_DIR = os.environ.get('EPILYKOS_IWD_DIR', '/data/iwd')
 COUNTRY_FILE = os.environ.get('EPILYKOS_WIFI_COUNTRY_FILE', '/data/network/wifi-country')
+ZONEINFO = os.environ.get('EPILYKOS_ZONEINFO', '/usr/share/zoneinfo')
+IW = os.environ.get('EPILYKOS_IW', 'iw')
+MODPROBE = os.environ.get('EPILYKOS_MODPROBE', 'modprobe')
 
 HEX64 = re.compile(r'^[0-9A-Fa-f]{64}$')
 COUNTRY = re.compile(r'^[A-Z]{2}$')
@@ -179,6 +183,48 @@ def load_country(path: str = None) -> str:
     except FileNotFoundError:
         return ''
     return value if COUNTRY.match(value) else ''
+
+
+# -- Regulatory country ------------------------------------------------------
+#
+# Which channels and power the radio may use. Without one the kernel uses
+# the world rules, where channels 12 and 13 are listen-only, and the Pi 3B
+# never sees a router there (as on 2026-10-21: a 2.4 GHz network on
+# channel 13 in Nigeria, found at once after "iw reg set NG").
+
+def country_for_zone(zone: str, zoneinfo: str = None) -> str:
+    """The country of an IANA time zone, from tzdata's zone.tab
+    (Africa/Lagos -> NG); '' for zones without one (UTC, Etc/...)."""
+    try:
+        with open(os.path.join(zoneinfo or ZONEINFO, 'zone.tab'), encoding='utf-8') as f:
+            for line in f:
+                cols = line.rstrip('\n').split('\t')
+                if len(cols) >= 3 and not line.startswith('#') and cols[2] == zone and COUNTRY.match(cols[0]):
+                    return cols[0]
+    except OSError:
+        pass
+    return ''
+
+
+def effective_country(zone: str, zoneinfo: str = None):
+    """(country, where it came from): a country set with the Wi-Fi settings
+    (wifi.txt, Raspberry Pi Imager) wins; otherwise the site time zone's."""
+    explicit = load_country()
+    if explicit:
+        return explicit, 'Wi-Fi settings'
+    country = country_for_zone(zone, zoneinfo)
+    return (country, f'time zone {zone}') if country else ('', '')
+
+
+def apply_country(zone: str, zoneinfo: str = None):
+    """Set the radio's regulatory country (iw reg set). Returns (country,
+    source, ok); country '' leaves the world rules in place."""
+    country, source = effective_country(zone, zoneinfo)
+    if not country:
+        return '', '', True
+    subprocess.run([MODPROBE, 'cfg80211'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ok = subprocess.run([IW, 'reg', 'set', country], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return country, source, ok
 
 
 # -- Provisioning files on the BOOT partition ------------------------------

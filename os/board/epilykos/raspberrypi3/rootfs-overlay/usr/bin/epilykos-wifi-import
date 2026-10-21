@@ -160,14 +160,19 @@ def apply_country():
 
 
 def main():
-    if os.path.isdir(BOOT):
-        import_ssh_files()
-        import_dashboard_password()
-        import_boot_files()
-    else:
+    # Each step on its own: a file that cannot be applied must not keep
+    # the others (above all the Wi-Fi settings) from being applied.
+    steps = [import_ssh_files, import_dashboard_password, import_boot_files] if os.path.isdir(BOOT) else []
+    if not steps:
         log(f'{BOOT} is not mounted; nothing to import')
-    apply_country()
-    return 0
+    failed = False
+    for step in steps + [apply_country]:
+        try:
+            step()
+        except Exception as e:  # noqa: BLE001
+            log(f'{step.__name__}: failed ({type(e).__name__}: {getattr(e, "strerror", None) or e})')
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':

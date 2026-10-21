@@ -1,13 +1,14 @@
 #!/usr/bin/python3
 """The narrow host interface the Epilykos container uses for system actions
 (C-HOST-001): Restart, Shut down, Change Wi-Fi, the SSH controls, the
-dashboard port, and application updates (C-UPDATE-002/004, epilykos_update).
+dashboard port, time zone and clock, Bluetooth pairing, and application
+updates (C-UPDATE-002/004, epilykos_update).
 
 Listens on /run/epilykos-host/host.sock, which only root and the
 container's app user (gid 1000) can open; the container sees the same
 directory. One JSON request per line, one JSON reply per line:
 
-    {"action": "status"}
+    {"action": "status"}                        also the clock and the SD card size
     {"action": "restart"} | {"action": "shutdown"}
     {"action": "wifi_setup"}                    open Bluetooth Wi-Fi setup for 15 min
     {"action": "ssh_enable"} | {"action": "ssh_disable"}
@@ -16,6 +17,13 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "ssh_add_key", "key": "ssh-ed25519 AAAA... name"}
     {"action": "ssh_remove_key", "fingerprint": "SHA256:..."}
     {"action": "set_port", "port": 8080}         dashboard port; restarts the app on it
+    {"action": "set_timezone", "timezone": "Africa/Lagos", "restart": true}
+                                                restarts the app when the zone changes
+    {"action": "set_clock", "epoch": 1767225600}  for a box with no time server
+    {"action": "bluetooth_status"} | {"action": "bluetooth_open"} | {"action": "bluetooth_close"}
+    {"action": "bluetooth_pair", "address": "AA:BB:CC:DD:EE:FF"}
+    {"action": "bluetooth_reply", "id": "...", "value": "1234"}   PIN, passkey or true
+    {"action": "bluetooth_remove", "address": "AA:BB:CC:DD:EE:FF"}
     {"action": "update_status"}                 installing? how did the last update end?
     {"action": "update_check"}                  is a newer signed app release out?
     {"action": "update_apply", "target": "app"} install it (replies at once, then works)
@@ -34,10 +42,10 @@ import threading
 import time
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_bluetooth as bluetooth  # noqa: E402
 import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
-import epilykos_bluetooth as bluetooth
-import epilykos_system as system
+import epilykos_system as system  # noqa: E402
 import epilykos_update as update  # noqa: E402
 
 SOCKET = os.environ.get('EPILYKOS_HOST_SOCKET', '/run/epilykos-host/host.sock')
@@ -45,6 +53,8 @@ RUN_DIR = os.environ.get('EPILYKOS_RUN_DIR', '/run/epilykos')
 SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
 APP_GID = int(os.environ.get('EPILYKOS_APP_GID', '1000'))
 WIFI_SETUP_S = 15 * 60
+BLUETOOTH_ACTIONS = ('bluetooth_status', 'bluetooth_open', 'bluetooth_close', 'bluetooth_pair',
+                     'bluetooth_reply', 'bluetooth_remove')
 MAX_REQUEST = 16 * 1024
 
 
@@ -81,26 +91,25 @@ def later(fn, delay=1.0):
     threading.Timer(delay, fn).start()
 
 
-def sshd_restart():
-    ssh.write_shadow()
-    if ssh.is_enabled():
-        systemctl('restart', 'epilykos-sshd.service')
-
-
 def handle(req):
     action = req.get('action')
-    if action in ('bluetooth_status', 'bluetooth_open', 'bluetooth_close', 'bluetooth_pair', 'bluetooth_reply', 'bluetooth_remove'):
+    if action in BLUETOOTH_ACTIONS:
         return bluetooth.action(action, req)
     if action == 'status':
         return {'ok': True, 'appliance': True, 'os_version': os_version(),
                 'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status(), 'port': port.read(),
                 'clock': system.clock(), 'storage': system.storage()}
     if action == 'set_timezone':
+        # The app gets TZ when its container starts (epilykos-run), so a new
+        # zone needs a restart; the same zone again does not.
+        changed = system.validate_zone(req.get('timezone')) != system.timezone()
         zone = system.set_timezone(req.get('timezone'))
         system.write_clock()
-        if req.get('restart', True):
-            later(lambda: systemctl('restart', 'epilykos.service'), delay=3)
-        return {'ok': True, 'timezone': zone, 'restart_required': True}
+        if changed:
+            log(f'time zone set to {zone} from Epilykos settings')
+            if req.get('restart', True):
+                later(lambda: systemctl('restart', 'epilykos.service'), delay=3)
+        return {'ok': True, 'timezone': zone, 'restart_required': changed}
     if action == 'set_clock':
         return {'ok': True, 'clock': system.set_clock(req.get('epoch'))}
     if action == 'restart':
@@ -187,6 +196,9 @@ class Handler(socketserver.StreamRequestHandler):
             except OSError as e:
                 log(f'{type(e).__name__}: {e.strerror or e}')
                 reply = {'ok': False, 'error': 'the host could not do that'}
+            except Exception as e:  # noqa: BLE001 - always answer; never drop the connection unanswered
+                log(f'unexpected {type(e).__name__} handling a request')
+                reply = {'ok': False, 'error': 'the host could not do that'}
         self.wfile.write(json.dumps(reply).encode() + b'\n')
 
 
@@ -223,12 +235,18 @@ def main():
         update.recover()
     except OSError as e:
         log(f'update recovery: {e}')
+    def write_clock():
+        try:
+            system.write_clock()
+        except OSError as e:
+            log(f'clock state: {e}')
+
     def clock_loop():
         while True:
-            try: system.write_clock()
-            except OSError as e: log(f'clock state: {e}')
             time.sleep(15)
-    system.write_clock()
+            write_clock()
+    # The container reads clock.json from its start, so write it before READY.
+    write_clock()
     bluetooth.start()
     threading.Thread(target=clock_loop, daemon=True).start()
     log(f'listening on {SOCKET}')

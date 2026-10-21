@@ -10,6 +10,7 @@ DATA = Path(os.environ.get('EPILYKOS_SYSTEM_DATA', '/data/epilykos'))
 RUN = Path(os.environ.get('EPILYKOS_RUN_DIR', '/run/epilykos'))
 ZONES = Path(os.environ.get('EPILYKOS_ZONEINFO', '/usr/share/zoneinfo'))
 SYS = Path(os.environ.get('EPILYKOS_SYS_BLOCK', '/sys/class/block'))
+UNDERSIZED_BYTES = 28_000_000_000
 
 
 class SystemError(ValueError):
@@ -86,8 +87,9 @@ def storage(source=None):
         if (dev / 'partition').exists():
             dev = dev.resolve().parent
         size = int((dev / 'size').read_text().strip()) * 512  # sysfs always uses 512-byte sectors
-        # Marketed 32 GB cards can have slightly less than 32e9 usable bytes.
-        return {'device': dev.name, 'bytes': size, 'undersized': size < 31_000_000_000,
+        # Marketed 32 GB cards hold 29.5e9 to 32e9 bytes, depending on the
+        # maker's spare area; a 16 GB card holds at most 16e9.
+        return {'device': dev.name, 'bytes': size, 'undersized': size < UNDERSIZED_BYTES,
                 'minimum_gb': 32, 'recommended_gb': 64}
     except (OSError, ValueError, subprocess.SubprocessError):
         return None

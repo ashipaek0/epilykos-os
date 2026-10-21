@@ -78,6 +78,8 @@ def set_enabled(on, ssh_dir=None):
 # only libcrypt.so.2; find_library() finds nothing there (no ldconfig cache
 # or compiler). Distributions ship libcrypt.so.1.
 LIBCRYPT_NAMES = ('libcrypt.so.2', 'libcrypt.so.1')
+_free = ctypes.CDLL(None).free  # crypt_ra's buffer is malloc'd for the caller
+_free.argtypes = [ctypes.c_void_p]
 
 
 def _libcrypt():
@@ -102,10 +104,14 @@ def hash_password(password):
     lib = _libcrypt()
     salt = '$6$' + ''.join(secrets.choice(string.ascii_letters + string.digits + './') for _ in range(16))
     data, size = ctypes.c_void_p(), ctypes.c_int(0)
-    out = lib.crypt_ra(password.encode(), salt.encode(), ctypes.byref(data), ctypes.byref(size))
-    if not out or not out.startswith(b'$6$'):
-        raise SshError('could not hash the password')
-    return out.decode()
+    try:
+        out = lib.crypt_ra(password.encode(), salt.encode(), ctypes.byref(data), ctypes.byref(size))
+        if not out or not out.startswith(b'$6$'):
+            raise SshError('could not hash the password')
+        return out.decode()
+    finally:
+        if data.value:
+            _free(data)
 
 
 def validate_password(password):
@@ -227,6 +233,8 @@ def _write_keys(lines, ssh_dir=None):
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
         f.write(''.join(l + '\n' for l in lines))
+        f.flush()
+        os.fsync(f.fileno())  # a power cut must not leave an empty file and no way in
     os.chmod(tmp, 0o644)
     os.replace(tmp, path)
 

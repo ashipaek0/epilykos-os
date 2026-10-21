@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Real flock behavior and failure cleanup, no external app/network needed."""
-import fcntl
 import os
 import subprocess
 import sys

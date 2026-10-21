@@ -35,6 +35,8 @@ WINDOW_FILE = os.path.join(tempfile.mkdtemp(prefix='run-'), 'wifi-setup-until')
 os.environ['EPILYKOS_WIFI_SETUP_FILE'] = WINDOW_FILE
 PORT_FILE = os.path.join(os.path.dirname(WINDOW_FILE), 'port')  # unset: the dashboard is on 3000
 os.environ['EPILYKOS_PORT_FILE'] = PORT_FILE
+os.environ['EPILYKOS_IMPROV_RETRY_DELAY'] = '0.05'   # joins try again quickly here
+os.environ['EPILYKOS_IMPROV_ADDRESS_WAIT'] = '2'
 sys.path.insert(0, str(OVERLAY / 'usr/lib/epilykos/python'))
 loader = importlib.machinery.SourceFileLoader('improv', str(OVERLAY / 'usr/bin/epilykos-improv'))
 spec = importlib.util.spec_from_loader('improv', loader)
@@ -192,13 +194,18 @@ class FakeStation(ServiceInterface):
     def Scanning(self) -> 'b':
         return False
 
+    @dbus_property(access=PropertyAccess.READ)
+    def State(self) -> 's':
+        return 'connected' if FakeNetwork.connected else 'disconnected'
+
     @method()
     def Scan(self):
         self.scans += 1
 
     @method()
     def GetOrderedNetworks(self) -> 'a(on)':
-        return [[STATION + '/home_psk', -5000], [STATION + '/bad_psk', -7200], [STATION + '/cafe_open', -8100]]
+        return [[STATION + '/home_psk', -5000], [STATION + '/bad_psk', -7200], [STATION + '/cafe_open', -8100],
+                [STATION + '/flaky_psk', -7100]]
 
     @method()
     def ConnectHiddenNetwork(self, name: 's'):
@@ -208,9 +215,9 @@ class FakeStation(ServiceInterface):
 class FakeNetwork(ServiceInterface):
     connected = None
 
-    def __init__(self, name, kind, works=True):
+    def __init__(self, name, kind, works=True, fails_first=0):
         super().__init__('net.connman.iwd.Network')
-        self.ssid, self.kind, self.works = name, kind, works
+        self.ssid, self.kind, self.works, self.fails_first, self.attempts = name, kind, works, fails_first, 0
 
     @dbus_property(access=PropertyAccess.READ)
     def Name(self) -> 's':
@@ -222,7 +229,10 @@ class FakeNetwork(ServiceInterface):
 
     @method()
     def Connect(self):
+        self.attempts += 1
         known = os.path.join(IWD_DIR, improv.wifi.iwd_file_name(self.ssid.encode(), self.kind == 'open'))
+        if self.attempts <= self.fails_first:  # e.g. an authentication timeout at a weak signal
+            raise DBusError('net.connman.iwd.Failed', 'Operation failed')
         if not self.works or not os.path.exists(known):
             raise DBusError('net.connman.iwd.Failed', 'Operation failed')
         FakeNetwork.connected = self.ssid
@@ -253,8 +263,11 @@ async def main():
     iwd_bus.export(STATION, FakeDevice())
     iwd_bus.export(STATION, station)
     iwd_bus.export(STATION + '/home_psk', FakeNetwork('Home Net', 'psk'))
-    iwd_bus.export(STATION + '/bad_psk', FakeNetwork('Bad Net', 'psk', works=False))
+    bad_net = FakeNetwork('Bad Net', 'psk', works=False)
+    iwd_bus.export(STATION + '/bad_psk', bad_net)
     iwd_bus.export(STATION + '/cafe_open', FakeNetwork('Cafe', 'open'))
+    flaky = FakeNetwork('Flaky Net', 'psk', fails_first=1)
+    iwd_bus.export(STATION + '/flaky_psk', flaky)
     await iwd_bus.request_name('net.connman.iwd')
 
     improv.ipv4_address = lambda ifname: '192.0.2.10' if FakeNetwork.connected and ifname == 'wlantest' else None
@@ -326,6 +339,25 @@ async def main():
         assert f.read() == before
     os.unlink(known)
     ok('failed join on a known network: its previous settings are put back')
+    assert bad_net.attempts == 2 * improv.JOIN_ATTEMPTS, bad_net.attempts
+    ok(f'a failing join is tried {improv.JOIN_ATTEMPTS} times before "unable to connect"')
+
+    # A first attempt that times out (as at a weak signal) is tried again.
+    await write(wifi_packet('Flaky Net', SECRET))
+    await wait_for(lambda: _eq(read('char0'), [improv.STATE_PROVISIONED]), 'provisioned after a retry')
+    assert flaky.attempts == 2 and FakeNetwork.connected == 'Flaky Net'
+    os.unlink(os.path.join(IWD_DIR, 'Flaky Net.psk'))
+    FakeNetwork.connected = None
+    service.set_state(improv.STATE_AUTHORIZED)
+    ok('join: a failed first attempt is tried again, and the second one joins')
+
+    # A network that isn't visible: one fresh scan more before giving up.
+    scans = station.scans
+    await write(wifi_packet('Nowhere', SECRET))
+    await wait_for(lambda: _eq(read('char1'), [improv.ERROR_UNABLE_TO_CONNECT]), 'unable-to-connect error')
+    assert station.scans == scans + 2, (station.scans, scans)
+    assert improv.wifi.configured_networks(IWD_DIR) == []
+    ok('a network not in range is looked for in a second, fresh scan, then reported')
 
     # The real thing, sent in 20-byte chunks like a small-MTU client.
     regs = advm.registrations
@@ -378,7 +410,7 @@ async def main():
     while i < len(result) - 1:
         strings.append(result[i + 1:i + 1 + result[i]].decode())
         i += 1 + result[i]
-    assert strings == ['Home Net', '-50', 'WPA2', 'Bad Net', '-72', 'WPA2', 'Cafe', '-81', 'NO'], strings
+    assert strings == ['Home Net', '-50', 'WPA2', 'Bad Net', '-72', 'WPA2', 'Cafe', '-81', 'NO', 'Flaky Net', '-71', 'WPA2'], strings
     ok('scan: SSID, RSSI and security of nearby networks')
 
     await write(improv.encode_rpc(improv.CMD_DEVICE_INFO, b''))

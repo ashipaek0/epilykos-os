@@ -13,3 +13,6 @@ LinkLocalAddressing=yes
 [DHCPv4]
 RouteMetric=100
 UseDomains=yes
+# The box keeps its own name (epilykos.local); a name from the router is
+# refused anyway ("Could not set hostname: Access denied").
+UseHostname=no

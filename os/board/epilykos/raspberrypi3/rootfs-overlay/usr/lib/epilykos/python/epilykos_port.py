@@ -1,4 +1,4 @@
-"""The port the Epilykos dashboard listens on (Settings -> System).
+"""The port the Epilykos dashboard listens on (Settings -> Network).
 
 Kept on DATA so it survives OS updates and slot switches:
 

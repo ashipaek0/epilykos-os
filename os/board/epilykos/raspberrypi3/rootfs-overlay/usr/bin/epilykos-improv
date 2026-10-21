@@ -497,8 +497,11 @@ class Improv:
             self.state = state
             self.chars['state'].set([state])
             self.adv.state = state
-            if self.advertising:
-                self.spawn(self.readvertise())
+            # Always queued: a re-advertisement already under way has
+            # self.advertising False between its stop and start, and may have
+            # handed BlueZ the old state. This one runs after it, behind
+            # adv_lock, and re-registers if advertising is on by then.
+            self.spawn(self.readvertise())
 
     def set_error(self, error):
         self.chars['error'].set([error])

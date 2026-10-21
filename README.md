@@ -16,7 +16,7 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 - Plug in Ethernet, or give it your Wi-Fi from your phone over Bluetooth, add wifi credentials via Raspberry Pi Imager's settings, or with a small wifi.txt file in the boot partition of the SD card.
 - Then open `http://epilykos.local:3000` in a browser.
 - The site time zone is set during setup, so daily totals and forecasts follow local time.
-- The dashboard's port can be changed in Settings → System; port 80 makes the address just `http://epilykos.local`.
+- The dashboard's port can be changed in Settings → Network; port 80 makes the address just `http://epilykos.local`.
 
 ## If something goes wrong
 
@@ -24,7 +24,7 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 
 **Forgot the dashboard password?** Put a file named `dashboard-password.txt` with the new password on its first line on the SD card's boot drive, then start the Pi. The file is deleted once it is used. With a keyboard and screen, `epilykos-reset-password` does the same.
 
-**Wi-Fi setup not showing on improv-wifi.com?** Use "Change Wi-Fi" in Settings → System, and don't pair the Pi in your computer's Bluetooth menu: setup doesn't need it.
+**Wi-Fi setup not showing on improv-wifi.com?** Use "Change Wi-Fi" in Settings → Network, and don't pair the Pi in your computer's Bluetooth menu: setup doesn't need it.
 
 ## What it does
 

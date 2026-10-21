@@ -12,7 +12,10 @@
 # ssid      the Wi-Fi network name, exactly as your phone shows it
 # password  its password (leave empty for an open network)
 # country   two-letter code of the country the box is in, e.g. GB, US,
-#           NG, DE; it selects the Wi-Fi channels allowed there
+#           NG, DE; it selects the Wi-Fi channels allowed there. Left
+#           empty, the box takes it from the time zone chosen in Epilykos
+#           setup, but that comes after Wi-Fi: fill it in if your router
+#           uses channel 12 or 13, or the box won't find it the first time
 # hidden    yes if the network does not broadcast its name
 
 ssid=

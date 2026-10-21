@@ -47,6 +47,7 @@ import epilykos_port as port  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_system as system  # noqa: E402
 import epilykos_update as update  # noqa: E402
+import epilykos_wifi as wifi  # noqa: E402
 
 SOCKET = os.environ.get('EPILYKOS_HOST_SOCKET', '/run/epilykos-host/host.sock')
 RUN_DIR = os.environ.get('EPILYKOS_RUN_DIR', '/run/epilykos')
@@ -107,6 +108,10 @@ def handle(req):
         system.write_clock()
         if changed:
             log(f'time zone set to {zone} from Epilykos settings')
+            # The Wi-Fi country follows it (unless the Wi-Fi settings gave one).
+            country, source, ok = wifi.apply_country(zone)
+            if country:
+                log(f'Wi-Fi country {country} (from the {source})' + ('' if ok else ' could not be set'))
             if req.get('restart', True):
                 later(lambda: systemctl('restart', 'epilykos.service'), delay=3)
         return {'ok': True, 'timezone': zone, 'restart_required': changed}

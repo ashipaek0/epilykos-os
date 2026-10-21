@@ -195,10 +195,14 @@ with tempfile.TemporaryDirectory() as d:
     env = dict(os.environ, EPILYKOS_HOST_SOCKET=str(sock), EPILYKOS_RUN_DIR=str(run), EPILYKOS_SSH_DIR=str(sshdir),
                EPILYKOS_SYSTEMCTL=str(fake), EPILYKOS_APP_GID=str(os.getgid()),
                EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1',
-               EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'))
+               EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'),
+               EPILYKOS_IW=str(d / 'iw'), EPILYKOS_MODPROBE='true', EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'data/wifi-country'))
     for zone in ('UTC', 'Africa/Lagos'):
         (d / 'zoneinfo' / zone).parent.mkdir(parents=True, exist_ok=True)
         (d / 'zoneinfo' / zone).write_bytes(b'TZif2 test zone')
+    (d / 'zoneinfo/zone.tab').write_text('NG\t+0627+00324\tAfrica/Lagos\n')
+    (d / 'iw').write_text(f'#!/bin/sh\necho "$@" >> {d / "iw-calls"}\n')
+    (d / 'iw').chmod(0o755)
     proc = subprocess.Popen([sys.executable, str(OVERLAY / 'usr/bin/epilykos-hostd')], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
@@ -281,7 +285,8 @@ with tempfile.TemporaryDirectory() as d:
         assert json.loads((run / 'clock.json').read_text())['timezone'] == 'Africa/Lagos'
         time.sleep(3.5)
         assert calls.read_text().splitlines().count('--no-block restart epilykos.service') == 2
-        ok('hostd set_timezone: saved, clock state updated, Epilykos restarted only when the zone changes')
+        assert (d / 'iw-calls').read_text().splitlines() == ['reg set NG'], 'the Wi-Fi country follows the new zone, once'
+        ok('hostd set_timezone: saved, clock state updated, Wi-Fi country set, Epilykos restarted only when the zone changes')
 
         assert call({'action': 'rm -rf /'}) == {'ok': False, 'error': 'unknown action'}
         assert call(None, raw=b'not json\n') == {'ok': False, 'error': 'malformed request'}

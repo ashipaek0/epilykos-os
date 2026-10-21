@@ -220,6 +220,60 @@ with tempfile.TemporaryDirectory() as d:
     assert 'wpa_supplicant.conf: not imported (the file is empty' in out, out
 ok('epilykos-wifi-import: UTF-16 wifi.txt imported; an empty (unflushed) file is reported and kept')
 
+# -- Wi-Fi country from the site time zone ------------------------------------------
+ZONE_TAB = """# tzdata zone.tab (excerpt): country, coordinates, zone, comments
+NG\t+0627+00324\tAfrica/Lagos
+GB\t+513030-0000731\tEurope/London
+GH\t+0533-00013\tAfrica/Accra
+"""
+with tempfile.TemporaryDirectory() as d:
+    zi = Path(d, 'zoneinfo')
+    for zone in ('Africa/Lagos', 'Europe/London', 'UTC'):
+        Path(zi, zone).parent.mkdir(parents=True, exist_ok=True)
+        Path(zi, zone).write_bytes(b'TZif2 test zone')
+    (zi / 'zone.tab').write_text(ZONE_TAB)
+    assert wifi.country_for_zone('Africa/Lagos', str(zi)) == 'NG'
+    assert wifi.country_for_zone('Europe/London', str(zi)) == 'GB'
+    assert wifi.country_for_zone('UTC', str(zi)) == '' and wifi.country_for_zone('Mars/Base', str(zi)) == ''
+    assert wifi.country_for_zone('Africa/Lagos', str(Path(d, 'nothing-here'))) == ''
+
+    saved, wifi.COUNTRY_FILE = wifi.COUNTRY_FILE, str(Path(d, 'data/network/wifi-country'))
+    try:
+        assert wifi.effective_country('Africa/Lagos', str(zi)) == ('NG', 'time zone Africa/Lagos')
+        assert wifi.effective_country('UTC', str(zi)) == ('', '')
+        wifi.save_country('GH')
+        assert wifi.effective_country('Africa/Lagos', str(zi)) == ('GH', 'Wi-Fi settings'), 'the Wi-Fi settings win'
+    finally:
+        wifi.COUNTRY_FILE = saved
+    ok('Wi-Fi country: from the time zone (zone.tab), unless the Wi-Fi settings give one')
+
+    calls = Path(d, 'iw-calls')
+    fake_iw = Path(d, 'iw')
+    fake_iw.write_text(f'#!/bin/sh\necho "$@" >> {calls}\n')
+    fake_iw.chmod(0o755)
+    (Path(d, 'data')).mkdir(exist_ok=True)
+    Path(d, 'data/timezone').write_text('Africa/Lagos\n')
+    env = dict(os.environ, EPILYKOS_SYSTEM_DATA=str(Path(d, 'data')), EPILYKOS_ZONEINFO=str(zi),
+               EPILYKOS_IW=str(fake_iw), EPILYKOS_MODPROBE='true',
+               EPILYKOS_WIFI_COUNTRY_FILE=str(Path(d, 'none/wifi-country')),
+               PYTHONPATH=str(OVERLAY / 'usr/lib/epilykos/python'), PYTHONDONTWRITEBYTECODE='1')
+    r = subprocess.run([sys.executable, str(OVERLAY / 'usr/bin/epilykos-wifi-country')], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and 'NG (from the time zone Africa/Lagos)' in r.stdout, r.stdout + r.stderr
+    assert calls.read_text().splitlines() == ['reg set NG'], calls.read_text()
+
+    # At boot, epilykos-wifi-import applies the same rule.
+    boot = Path(d, 'boot'); boot.mkdir()
+    r = subprocess.run([sys.executable, str(OVERLAY / 'usr/bin/epilykos-wifi-import')],
+                       env=dict(env, EPILYKOS_BOOT_DIR=str(boot), EPILYKOS_IWD_DIR=str(Path(d, 'iwd'))), capture_output=True, text=True)
+    assert r.returncode == 0 and 'Wi-Fi country NG (from the time zone Africa/Lagos)' in r.stdout, r.stdout + r.stderr
+    assert calls.read_text().splitlines() == ['reg set NG', 'reg set NG']
+
+    # No country anywhere (UTC): the world rules stay, iw isn't run.
+    Path(d, 'data/timezone').write_text('UTC\n')
+    r = subprocess.run([sys.executable, str(OVERLAY / 'usr/bin/epilykos-wifi-country')], env=env, capture_output=True, text=True)
+    assert r.returncode == 0 and calls.read_text().splitlines() == ['reg set NG', 'reg set NG']
+ok('epilykos-wifi-country and epilykos-wifi-import: iw reg set from the time zone; nothing without a country')
+
 # -- Raspberry Pi Imager OS list ---------------------------------------------------
 with tempfile.TemporaryDirectory() as d:
     img, dl = Path(d, 'sdcard.img'), Path(d, 'sdcard.img.xz')

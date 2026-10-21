@@ -1,0 +1,4 @@
+# The Wi-Fi country (epilykos-wifi-country): set again when the interface
+# appears, in case the driver came up after boot set it. Without it the
+# radio keeps the world rules and can't see routers on channels 12-13.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/usr/bin/epilykos-wifi-country"

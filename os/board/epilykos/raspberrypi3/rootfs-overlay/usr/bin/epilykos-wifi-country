@@ -1,0 +1,25 @@
+#!/usr/bin/python3
+"""Set the Wi-Fi regulatory country: the one given with the Wi-Fi settings
+(wifi.txt, Raspberry Pi Imager), or else the site time zone's (Africa/Lagos
+-> NG), so the radio may use that country's channels, such as 12 and 13.
+
+Run when wlan0 appears (udev, 81-epilykos-wifi-country.rules): the driver
+can come up after epilykos-wifi-import set it at boot. epilykos-hostd does
+the same when the time zone changes.
+"""
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_system as system  # noqa: E402
+import epilykos_wifi as wifi  # noqa: E402
+
+
+def main():
+    country, source, ok = wifi.apply_country(system.timezone())
+    if country:
+        print(f'epilykos-wifi-country: {country} (from the {source})' + ('' if ok else ' could not be set'), flush=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

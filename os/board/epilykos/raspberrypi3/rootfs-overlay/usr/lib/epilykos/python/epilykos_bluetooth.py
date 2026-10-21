@@ -12,14 +12,25 @@ import uuid
 from dbus_fast import BusType, DBusError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method
+import os
 
 BLUEZ = 'org.bluez'
 AGENT = '/org/epilykos/PairingAgent'
 WINDOW_S = 300
+# Tests run against a fake BlueZ on a private session bus.
+BUS_TYPE = BusType.SESSION if os.environ.get('EPILYKOS_BLUEZ_BUS') == 'session' else BusType.SYSTEM
 
 
 class PairingError(ValueError):
     pass
+
+
+async def bluez_owner(bus):
+    """bluetoothd's unique bus name, or None while it is not running."""
+    reply = await asyncio.wait_for(bus.call(Message(destination='org.freedesktop.DBus', path='/org/freedesktop/DBus',
+                                                    interface='org.freedesktop.DBus', member='GetNameOwner',
+                                                    signature='s', body=[BLUEZ])), 8)
+    return reply.body[0] if reply.message_type == MessageType.METHOD_RETURN else None
 
 
 async def call(bus, path, interface, member, signature='', body=()):
@@ -250,14 +261,19 @@ def start():
             while True:
                 bus = None
                 try:
-                    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+                    bus = await MessageBus(bus_type=BUS_TYPE).connect()
+                    owner = await bluez_owner(bus)
                     manager = Pairing(bus)
                     await manager.init()
                     _manager = manager
-                    while bus.connected:
+                    # A bluetoothd restart (epilykos-improv restarts it to free stuck
+                    # advertising slots) drops our agent registration: start over.
+                    while bus.connected and await bluez_owner(bus) == owner:
                         if manager.until and not manager.active():
                             await manager.close()
                         await asyncio.sleep(1)
+                    if bus.connected:
+                        print('epilykos-hostd: bluetoothd restarted; registering the pairing agent again', flush=True)
                 except Exception as e:
                     print(f'epilykos-hostd: Bluetooth pairing unavailable ({type(e).__name__})', flush=True)
                 finally:

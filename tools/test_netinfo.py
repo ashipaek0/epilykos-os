@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """The network status Settings -> Network shows (epilykos_netinfo): default
 gateway, Wi-Fi link and channel, without touching the test host's network."""
-import os
 import sys
 import tempfile
 from pathlib import Path

@@ -29,6 +29,16 @@ Approved in the decision review on 2026-10-17. These are requirements and scope 
 | R17C | Include independent recovery for both failed Linux slots: automatic entry, authenticated offline OS repair, DATA preservation and no rootfs/DATA/container dependency. Storage placement is not yet designed; no fifth partition assumed. |
 | R18 | Establish initial real Pi 3B platform/recovery evidence and a 72-hour production-size soak, then automated regressions with targeted hardware revalidation. Align source contracts and generated documentation; do not introduce per-image manual approval. |
 
+## Decisions of 2026-10-22 (OS updates from Settings)
+
+Decided by the maintainer; the design is [os-dashboard-updates-design.md](os-dashboard-updates-design.md).
+
+| ID | Decision |
+|---|---|
+| D1 | OS updates from Settings replace a whole ROOT slot (kernel, DTB, modules, rootfs, bundled app; R02A) and ship once they pass on hardware. The boot chain on BOOT is fixed at flashing and changes only by reflashing. R02B, R02C and R17C stay v1 work as a separate track (Track B) that does not gate slot updates. |
+| D2 | The maintainer generates and keeps the OS release CA, the OS development CA and the OS index key offline; CI holds only the signing keys it needs, in a protected environment. |
+| D3 | A spare SD card is available for destructive tests. There is no power-control rig or serial cable; power-cut tests are done by hand. |
+
 ## Design and evidence still outstanding
 
 - Demonstrate the Pi 3B pre-U-Boot fallback/reset mechanism and define the protected earliest bootstrap boundary. Atomic writes alone do not establish recovery from a valid but hanging loader.

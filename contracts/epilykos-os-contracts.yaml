@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.7.0-draft
+  version: 0.7.1-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -707,6 +707,9 @@ contracts:
     port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
   - 'A forgotten dashboard password MUST be replaceable with physical access only, never over the network:
     dashboard-password.txt on BOOT (read once before the app starts, then deleted) or epilykos-reset-password on the console.'
+  - 'A factory reset MUST erase everything on DATA and nothing else, asked for with the word ERASE from settings
+    (factory_reset), the console (epilykos-factory-reset) or factory-reset.txt on BOOT; it is carried out before DATA is
+    mounted on the next boot, and the request is deleted only after DATA has been rewritten and never carried out twice.'
   evidence:
   - 'Restart and shutdown from the dashboard: clean journal shutdown, no fsck repair on the next boot'
   - Unauthenticated request rejected
@@ -1194,6 +1197,10 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.7.1-draft
+  changes:
+  - 'C-HOST-001: factory reset (settings, console, or factory-reset.txt on BOOT saying ERASE) erases DATA on the next
+    boot and starts again as newly flashed.'
 - version: 0.7.0-draft
   changes:
   - Record the 22 maintainer-approved v1 decisions from 2026-10-17; supersede older GPT, reflash-only recovery,

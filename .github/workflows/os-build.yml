@@ -238,7 +238,7 @@ jobs:
                    epilykos-hostd.service epilykos-sshd.service; do
             echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
-          for u in epilykos-data-layout.service epilykos-data-grow.service; do
+          for u in epilykos-data-layout.service epilykos-data-grow.service epilykos-factory-reset.service; do
             enabled local-fs.target.wants | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
           enabled swap.target.wants | grep -qx epilykos-zram.service || { echo "epilykos-zram.service is not enabled in rootfs.ext4"; exit 1; }

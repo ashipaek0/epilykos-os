@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """The narrow host interface the Epilykos container uses for system actions
-(C-HOST-001): Restart, Shut down, Change Wi-Fi, the SSH controls, the
+(C-HOST-001): Restart, Shut down, Factory reset, Change Wi-Fi, the SSH controls, the
 dashboard port, time zone and clock, Bluetooth pairing, and application
 updates (C-UPDATE-002/004, epilykos_update).
 
@@ -10,6 +10,8 @@ directory. One JSON request per line, one JSON reply per line:
 
     {"action": "status"}                        also the clock, SD card size and network
     {"action": "restart"} | {"action": "shutdown"}
+    {"action": "factory_reset", "confirm": "ERASE"}
+                                                erase DATA on the next boot, then restart now
     {"action": "wifi_setup"}                    open Bluetooth Wi-Fi setup for 15 min
     {"action": "ssh_enable"} | {"action": "ssh_disable"}
     {"action": "ssh_set_password", "password": "..."}
@@ -45,6 +47,7 @@ sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_bluetooth as bluetooth  # noqa: E402
 import epilykos_netinfo as netinfo  # noqa: E402
 import epilykos_port as port  # noqa: E402
+import epilykos_reset as reset  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_system as system  # noqa: E402
 import epilykos_update as update  # noqa: E402
@@ -134,6 +137,12 @@ def handle(req):
         log('shutdown requested from Epilykos settings')
         later(lambda: systemctl('poweroff'))
         return {'ok': True}
+    if action == 'factory_reset':
+        reset.check(req.get('confirm'))
+        reset.request('Epilykos settings')
+        log('factory reset requested from Epilykos settings; erasing DATA after the restart')
+        later(lambda: systemctl('reboot'), delay=2)
+        return {'ok': True}
     if action == 'wifi_setup':
         until = int(time.time()) + WIFI_SETUP_S
         os.makedirs(RUN_DIR, exist_ok=True)
@@ -203,7 +212,7 @@ class Handler(socketserver.StreamRequestHandler):
                 if not isinstance(req, dict):
                     raise ValueError('not an object')
                 reply = handle(req)
-            except (ssh.SshError, port.PortError, update.UpdateError, system.SystemError, bluetooth.PairingError) as e:
+            except (ssh.SshError, port.PortError, update.UpdateError, system.SystemError, bluetooth.PairingError, reset.ResetError) as e:
                 reply = {'ok': False, 'error': str(e)}
             except (ValueError, UnicodeError):
                 reply = {'ok': False, 'error': 'malformed request'}

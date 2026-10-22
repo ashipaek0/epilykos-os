@@ -20,6 +20,10 @@ epilykos), or an authorized_keys file in the root of BOOT.
 
 A forgotten dashboard password is replaced by dashboard-password.txt (the
 new password on its first line), read before Epilykos starts and deleted.
+
+factory-reset.txt is not read here: epilykos-factory-reset-boot carries it
+out before DATA is mounted (epilykos_reset.py). This only forgets the
+record of a reset once its request has gone from BOOT.
 """
 import os
 import subprocess
@@ -27,6 +31,7 @@ import sys
 
 sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_dashboard as dashboard  # noqa: E402
+import epilykos_reset as reset  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_system as system  # noqa: E402
 import epilykos_wifi as wifi  # noqa: E402
@@ -164,10 +169,15 @@ def apply_country():
         log('no Wi-Fi country set and none from the time zone; using the world rules (channels 12-13 listen-only)')
 
 
+def forget_factory_reset():
+    if reset.forget_done(BOOT):
+        log('factory reset finished (its request is gone from BOOT)')
+
+
 def main():
     # Each step on its own: a file that cannot be applied must not keep
     # the others (above all the Wi-Fi settings) from being applied.
-    steps = [import_ssh_files, import_dashboard_password, import_boot_files] if os.path.isdir(BOOT) else []
+    steps = [import_ssh_files, import_dashboard_password, import_boot_files, forget_factory_reset] if os.path.isdir(BOOT) else []
     if not steps:
         log(f'{BOOT} is not mounted; nothing to import')
     failed = False

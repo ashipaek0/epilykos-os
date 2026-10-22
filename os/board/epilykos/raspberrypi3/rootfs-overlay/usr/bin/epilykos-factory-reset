@@ -1,0 +1,36 @@
+#!/usr/bin/python3
+"""Factory reset from the console, or over SSH as `sudo epilykos-factory-reset`:
+erases everything on DATA at the next boot and restarts now. Asks for ERASE
+first. What is erased and what stays is in epilykos_reset.py.
+"""
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_reset as reset  # noqa: E402
+
+SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
+
+
+def main():
+    if os.geteuid() != 0 and 'EPILYKOS_BOOT_DIR' not in os.environ:
+        print('Run it as root: sudo epilykos-factory-reset', file=sys.stderr)
+        return 1
+    print('Factory reset erases everything this box keeps: Epilykos data, settings and backups,\n'
+          'Wi-Fi networks, SSH settings and keys, Bluetooth pairings and logs. The box then\n'
+          'restarts as if newly flashed, and is set up again over Bluetooth or wifi.txt.')
+    answer = sys.stdin.readline() if not sys.stdin.isatty() else input(f'Type {reset.CONFIRM} to erase everything and restart: ')
+    try:
+        reset.check(answer)
+    except reset.ResetError:
+        print('Not confirmed; nothing erased.', file=sys.stderr)
+        return 1
+    reset.request('the console')
+    print('Restarting; the box erases its data while it starts.')
+    subprocess.run([SYSTEMCTL, 'reboot'], check=False)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

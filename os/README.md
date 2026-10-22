@@ -82,7 +82,13 @@ own partition layout).
   new password on its first line, read before Epilykos starts, then
   deleted) or `epilykos-reset-password` on the console. Neither works
   over the network.
-- System actions in Epilykos settings (`C-HOST-001`): Restart, Shut down,
+- Factory reset (`C-HOST-001`): Settings → System, `epilykos-factory-reset`
+  on the console, or a `factory-reset.txt` on BOOT saying `ERASE`. Each
+  leaves that file on BOOT; the next boot writes a new, empty DATA before
+  mounting it (`epilykos-factory-reset-boot`) and deletes the file. Both OS
+  slots, the slot in use and the machine ID are not on DATA and stay; the
+  app comes back as this OS release shipped it.
+- System actions in Epilykos settings (`C-HOST-001`): Restart, Shut down, Factory reset,
   Change Wi-Fi (opens Bluetooth setup for 15 minutes), the dashboard port
   and the SSH controls. The container reaches them only through
   `epilykos-hostd`, a socket that accepts exactly those actions. Shut down halts the Pi; it

@@ -7,6 +7,7 @@
 # off is disabled here explicitly. CI checks the result in rootfs.ext4.
 enable epilykos-data-layout.service
 enable epilykos-data-grow.service
+enable epilykos-factory-reset.service
 enable epilykos-machine-id.service
 enable epilykos-zram.service
 enable epilykos-shadow.service

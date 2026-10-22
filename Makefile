@@ -19,6 +19,7 @@ test:
 	$(PYTHON) tools/test_sync_app_release.py
 	$(PYTHON) tools/test_wifi_provisioning.py
 	$(PYTHON) tools/test_host_actions.py
+	$(PYTHON) tools/test_factory_reset.py
 	$(PYTHON) tools/check_rauc_conf.py
 	$(PYTHON) tools/test_shared_maintenance.py
 	$(PYTHON) tools/test_app_compatibility.py

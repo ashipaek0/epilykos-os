@@ -197,7 +197,9 @@ with tempfile.TemporaryDirectory() as d:
                EPILYKOS_PORT_FILE=str(d / 'data/port'), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1',
                EPILYKOS_SYSTEM_DATA=str(d / 'data'), EPILYKOS_ZONEINFO=str(d / 'zoneinfo'),
                EPILYKOS_IW=str(d / 'iw'), EPILYKOS_MODPROBE='true', EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'data/wifi-country'),
-               EPILYKOS_PROC_ROUTE=str(d / 'route'), EPILYKOS_SYS_NET=str(d / 'sys-net'))
+               EPILYKOS_PROC_ROUTE=str(d / 'route'), EPILYKOS_SYS_NET=str(d / 'sys-net'),
+               EPILYKOS_BOOT_DIR=str(d / 'boot'))
+    (d / 'boot').mkdir()
     (d / 'route').write_text('Iface\tDestination\tGateway\tFlags\nwlan0\t00000000\t0100A8C0\t0003\n')
     for zone in ('UTC', 'Africa/Lagos'):
         (d / 'zoneinfo' / zone).parent.mkdir(parents=True, exist_ok=True)
@@ -305,6 +307,19 @@ with tempfile.TemporaryDirectory() as d:
         assert '--no-block start epilykos-sshd.service' in lines and '--no-block stop epilykos-sshd.service' in lines
         assert lines[-2:] in (['--no-block reboot', '--no-block poweroff'], ['--no-block poweroff', '--no-block reboot']), lines
         ok('hostd restart/shutdown: reply first, then systemctl reboot/poweroff')
+
+        request = d / 'boot/factory-reset.txt'
+        for confirm in (None, '', 'yes', 'ERASE ALL'):
+            r = call({'action': 'factory_reset', 'confirm': confirm} if confirm is not None else {'action': 'factory_reset'})
+            assert r == {'ok': False, 'error': 'type ERASE to confirm the factory reset'}, r
+        assert not request.exists()
+        before = len(calls.read_text().splitlines())
+        assert call({'action': 'factory_reset', 'confirm': ' erase '}) == {'ok': True}
+        text = request.read_bytes()
+        assert text.startswith(b'ERASE\r\n') and b'Epilykos settings' in text, text
+        time.sleep(2.5)
+        assert calls.read_text().splitlines()[before:] == ['--no-block reboot']
+        ok('hostd factory_reset: only with ERASE; leaves factory-reset.txt on BOOT, then restarts')
     finally:
         proc.terminate()
         out = proc.communicate(timeout=5)[0]

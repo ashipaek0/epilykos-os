@@ -1,0 +1,83 @@
+#!/bin/sh
+# Factory reset (C-HOST-001), done early in boot when factory-reset.txt
+# on BOOT says ERASE on a line of its own: writes a new, empty filesystem
+# over DATA, then deletes the request. How it is asked for, and what it
+# erases and keeps, is in epilykos_reset.py.
+#
+# Runs before /data is mounted (epilykos-factory-reset.service is ordered
+# Before=data.mount, after epilykos-data-grow), so nothing has DATA open.
+# The request is deleted only once DATA has been rewritten: power lost
+# part-way just means the next boot erases it again.
+set -e
+
+# EPILYKOS_BOOT_DIR and EPILYKOS_DATA_DEV: tests use a plain directory and
+# an image file.
+BOOT=${EPILYKOS_BOOT_DIR:-/boot}
+REQUEST="${BOOT}/factory-reset.txt"
+PART_DEV=$(readlink -f "${EPILYKOS_DATA_DEV:-/dev/disk/by-partuuid/45504c4b-04}")
+
+log() { echo "epilykos-factory-reset: $*"; }
+
+[ -f "${REQUEST}" ] || exit 0
+
+# Windows line endings and a byte-order mark are fine; ERASE in any case.
+if ! tr -d '\r\357\273\277' < "${REQUEST}" | grep -qix '[[:space:]]*erase[[:space:]]*'; then
+	log "${REQUEST} has no line saying ERASE; nothing erased (put ERASE on a line of its own to go ahead)"
+	exit 0
+fi
+
+if findmnt -n -S "${PART_DEV}" >/dev/null 2>&1; then
+	log "${PART_DEV} is mounted; not erasing it now"
+	exit 1
+fi
+
+# The request, by content: the new DATA records it as done, so a request
+# that could not be deleted from BOOT is never carried out a second time
+# (which would erase a box set up again since).
+sum=$(sha256sum < "${REQUEST}" | cut -d' ' -f1)
+mnt=${EPILYKOS_RUN_DIR:-/run}/epilykos-factory-reset
+mkdir -p "${mnt}"
+
+delete_request() {
+	if [ -z "${EPILYKOS_BOOT_DIR}" ]; then
+		mount -o remount,rw "${BOOT}" || { log "could not write to BOOT to delete ${REQUEST}"; return 1; }
+	fi
+	rm -f "${REQUEST}"
+	sync
+	if [ -z "${EPILYKOS_BOOT_DIR}" ]; then
+		mount -o remount,ro "${BOOT}" || true
+	fi
+}
+
+# Read the old DATA for two things: whether this request was already
+# carried out, and the last time the box knew (timesyncd keeps it on
+# DATA), so the clock doesn't go back to the build date until a time
+# server answers. A DATA that won't mount is erased all the same.
+saved=0
+done_sum=
+if mount -o ro "${PART_DEV}" "${mnt}" 2>/dev/null; then
+	saved=$(stat -c %Y "${mnt}/timesync/clock" 2>/dev/null || echo 0)
+	done_sum=$(cat "${mnt}/.factory-reset-done" 2>/dev/null || true)
+	umount "${mnt}"
+fi
+
+if [ "${done_sum}" = "${sum}" ]; then
+	log "this factory reset was already carried out; not erasing again, deleting the request"
+	delete_request
+	exit 0
+fi
+
+log "erasing DATA (${PART_DEV}): app data and settings, Wi-Fi networks, SSH, Bluetooth pairings and logs"
+mke2fs -q -F -t ext4 -L DATA "${PART_DEV}"
+
+if mount "${PART_DEV}" "${mnt}" 2>/dev/null; then
+	echo "${sum}" > "${mnt}/.factory-reset-done" || true
+	umount "${mnt}"
+fi
+
+if [ "${saved}" -gt "$(date +%s)" ]; then
+	date -s "@${saved}" >/dev/null && log "clock set to the last time saved before the reset"
+fi
+
+delete_request
+log "DATA erased; starting as a newly flashed box"

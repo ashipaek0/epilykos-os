@@ -83,6 +83,11 @@ ADV_FAILURES_BEFORE_RESET = 3
 BLUEZ_RESET_FILE = os.environ.get('EPILYKOS_IMPROV_RESET_FILE', '/run/epilykos/improv-bluetooth-reset')
 BLUEZ_RESET_INTERVAL_S = 600
 SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
+# Joining: a first attempt at a weak signal can time out (802.11 status 16
+# on a Pi 3B at -71 dBm), so try a few times; the router's DHCP can be slow.
+JOIN_ATTEMPTS = 3
+JOIN_RETRY_S = float(os.environ.get('EPILYKOS_IMPROV_RETRY_DELAY', '3'))
+ADDRESS_WAIT_S = float(os.environ.get('EPILYKOS_IMPROV_ADDRESS_WAIT', '60'))
 
 BLUEZ = 'org.bluez'
 IWD = 'net.connman.iwd'
@@ -299,6 +304,13 @@ class Iwd:
                 return path, (name.value if name else 'wlan0')
         return None, None
 
+    async def state(self, station):
+        """The station's State ('connected', 'connecting', 'disconnected', ...), or None."""
+        try:
+            return await get_prop(self.bus, IWD, station, 'net.connman.iwd.Station', 'State')
+        except (DBusError, asyncio.TimeoutError):
+            return None
+
     async def scan(self, station):
         try:
             await call(self.bus, IWD, station, 'net.connman.iwd.Station', 'Scan')
@@ -317,16 +329,22 @@ class Iwd:
         return networks
 
     async def connect(self, station, ssid: str, hidden: bool):
-        networks = await self.scan(station)
-        for path, name, _, _ in networks:
-            if name == ssid:
-                await call(self.bus, IWD, path, 'net.connman.iwd.Network', 'Connect', timeout=60)
+        # A second, fresh scan before "not in range": the first list can be
+        # one iwd made before the network answered.
+        for attempt in range(2):
+            networks = await self.scan(station)
+            for path, name, _, _ in networks:
+                if name == ssid:
+                    await call(self.bus, IWD, path, 'net.connman.iwd.Network', 'Connect', timeout=60)
+                    return
+            if hidden:
+                await call(self.bus, IWD, station, 'net.connman.iwd.Station',
+                           'ConnectHiddenNetwork', 's', (ssid,), timeout=60)
                 return
-        if hidden:
-            await call(self.bus, IWD, station, 'net.connman.iwd.Station',
-                       'ConnectHiddenNetwork', 's', (ssid,), timeout=60)
-            return
-        raise DBusError('net.connman.iwd.NotFound', 'network not in range')
+            if attempt == 0:
+                await asyncio.sleep(2)
+        raise DBusError('net.connman.iwd.NotFound',
+                        f'network not in range ({len(networks)} networks visible; a Pi 3B sees only 2.4 GHz networks)')
 
 
 # -- GATT objects -------------------------------------------------------------
@@ -576,12 +594,7 @@ class Improv:
             station, ifname = await self.iwd.station()
             if not station:
                 raise DBusError('net.connman.iwd.NotFound', 'no Wi-Fi interface')
-            await self.iwd.connect(station, net.display_ssid, net.hidden)
-            for _ in range(60):
-                ip = ipv4_address(ifname)
-                if ip:
-                    break
-                await asyncio.sleep(0.5)
+            ip = await self.join(station, ifname, net)
         except (DBusError, asyncio.TimeoutError) as e:
             log(f'could not join "{net.display_ssid}": {getattr(e, "type", "")} {e}')
         except Exception as e:  # noqa: BLE001 - never leave the phone waiting on "provisioning"
@@ -599,6 +612,54 @@ class Improv:
         close_dashboard_window()
         self.send_result(CMD_WIFI_SETTINGS, [dashboard_port.dashboard_url(ip)])
         self.set_state(STATE_PROVISIONED)
+
+    async def join(self, station, ifname, net):
+        """Join NET and wait for the router's DHCP address. Tries again when
+        an attempt fails or the link drops before an address arrives; gives
+        up (None) when joined but no address comes. Raises when the network
+        isn't in range, or on the last failed attempt."""
+        ssid = net.display_ssid
+        for attempt in range(1, JOIN_ATTEMPTS + 1):
+            try:
+                await self.iwd.connect(station, ssid, net.hidden)
+            except DBusError as e:
+                if e.type == 'net.connman.iwd.NotFound' or attempt == JOIN_ATTEMPTS:
+                    raise
+                # InProgress: iwd's own autoconnect is joining it already.
+                if e.type != 'net.connman.iwd.InProgress':
+                    log(f'could not join "{ssid}" (attempt {attempt} of {JOIN_ATTEMPTS}): {e.type} {e}; trying again')
+                    await asyncio.sleep(JOIN_RETRY_S)
+                    continue
+            ip, dropped = await self.wait_for_address(station, ifname)
+            if ip:
+                return ip
+            if not dropped:
+                log(f'joined "{ssid}" but the router gave no IP address within {ADDRESS_WAIT_S:.0f} s')
+                return None
+            log(f'"{ssid}" dropped the connection before an address arrived (attempt {attempt} of {JOIN_ATTEMPTS})'
+                + ('; trying again' if attempt < JOIN_ATTEMPTS else ''))
+            if attempt < JOIN_ATTEMPTS:
+                await asyncio.sleep(JOIN_RETRY_S)
+        return None
+
+    async def wait_for_address(self, station, ifname):
+        """(ip, None) once the interface has an IPv4 address; (None, True)
+        when the station has been off the network for 3 s; (None, False)
+        after ADDRESS_WAIT_S."""
+        start, down_since = time.monotonic(), None
+        while time.monotonic() - start < ADDRESS_WAIT_S:
+            ip = ipv4_address(ifname)
+            if ip:
+                return ip, None
+            state = await self.iwd.state(station)
+            if state in (None, 'connected', 'connecting', 'roaming'):
+                down_since = None
+            elif down_since is None:
+                down_since = time.monotonic()
+            elif time.monotonic() - down_since >= 3:
+                return None, True
+            await asyncio.sleep(0.5)
+        return None, False
 
     # BlueZ registration
     async def find_adapter(self):

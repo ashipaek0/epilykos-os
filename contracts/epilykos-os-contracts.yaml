@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.7.2-draft
+  version: 0.8.0-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -430,8 +430,14 @@ contracts:
     to documented policy.
   - The private release signing key MUST NOT be embedded in images or repositories.
   - Invalid signatures, unsigned bundles and untrusted signers MUST be rejected before writing an update slot. Corrupt streamed payload content MUST prevent successful activation.
-  - RAUC public trust anchors MUST be embedded in each OS slot. Production images trust only the release CA; developer
-    trust policy MUST be explicit, with no dashboard verification bypass.
+  - RAUC trust anchors MUST come from the offline-root-signed channel trust policy kept in the redundant U-Boot
+    environment and verified against the root public key pinned on BOOT, so a revocation survives OS rollback and DATA
+    loss; there is no slot-local fallback keyring. Stable policies trust only the release CA; developer trust policy
+    MUST be explicit, with no dashboard verification bypass.
+  - The actual bundle signer's SPKI MUST be in the policy's allowlist, and every package MUST carry a signed
+    authorization entry from a delegated index key listed in the current policy, which the bundle's signed manifest
+    ([meta.epilykos]) agrees with. Trust epochs never decrease. Certificates are checked at the bundle's signing time;
+    revocation is by policy, never by certificate expiry.
   - Keep CA private keys offline with a protected recoverable backup and a separate protected CI release signer.
     App-manifest, RAUC and future secure-boot keys MUST remain separate.
   - Online, upload and USB installation MUST apply identical authenticity and board checks. Test offline certificate-time
@@ -442,8 +448,10 @@ contracts:
   - Wrong-CA rejection test
   - Repository secret scan
   implementation_status:
-  - No RAUC keyring, signed OS bundle publication or OS install API is implemented yet; installation is intentionally
-    refused. Signing/trust policy is approved, not proven.
+  - 'Protocol-2 cards: verity bundles, the shared root-signed policy and its generated RAUC keyring, delegated entries
+    and the signer allowlist are implemented with real RAUC 1.15.2 and guarded fw-tools tests (epilykos_os_trust,
+    tools/test_os_bundle.py); Settings installs through os_install (epilykos_os_update). Production keys, publication
+    and hardware install evidence are pending. Protocol-1 cards have no keyring and refuse every bundle.'
 - id: C-UPDATE-002
   title: Application update manifest
   stage: 5
@@ -711,6 +719,10 @@ contracts:
     password.'
   - Settings MUST also check for and install application updates through the same interface (update_status, update_check,
     update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
+  - On protocol-2 cards Settings MUST check for and install OS updates through the same interface (os_status, os_check,
+    os_install, os_cancel, os_dismiss) under C-UPDATE-001; a host worker does the work. While a job is installing, ready
+    or needs reconciling, the host refuses conflicting actions (restart, shut down, factory reset, port changes, app
+    updates) according to its guard, which the app reads from a read-only mount.
   - Settings MUST let the administrator change the dashboard's port (set_port), 80 or 1024-65535 and free on the box; the
     port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
   - 'A forgotten dashboard password MUST be replaceable with physical access only, never over the network:
@@ -1205,6 +1217,12 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.8.0-draft
+  changes:
+  - 'C-UPDATE-001: RAUC trust comes from the offline-root-signed policy in the U-Boot environment (root pinned on BOOT),
+    not slot-local anchors; signer SPKI allowlist, signed per-package authorization, signing-time certificate checks.'
+  - 'C-HOST-001: OS update actions (os_status, os_check, os_install, os_cancel, os_dismiss) and the guard that refuses
+    conflicting maintenance during a job.'
 - version: 0.7.2-draft
   changes:
   - 'C-RUNTIME-003: the Pi 3B Bluetooth UART runs at 921600 baud (hci_uart.max_speed, kernel patch) instead of the

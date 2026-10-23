@@ -1,0 +1,17 @@
+[Unit]
+Description=EpilykosOS: OS update job (download, verify, install into the other slot)
+Documentation=https://github.com/ashipaek0/epilykos-os/blob/dev/plans/decisions/os-dashboard-updates-design.md
+# Started only by epilykos-hostd for an admitted job, and again by it after a
+# restart or power cut so the job resumes or is reconciled. Its own unit, so
+# a hostd restart neither stops nor duplicates an install. Never enabled.
+RequiresMountsFor=/data
+After=rauc.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/epilykos-os-update
+# RAUC does the slot writes; the download and checks yield to the app.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStopSec=60

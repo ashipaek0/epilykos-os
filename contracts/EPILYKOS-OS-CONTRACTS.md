@@ -2,7 +2,7 @@
 
 # EPILYKOS-OS-CONTRACTS
 
-**Version:** 0.7.2-draft
+**Version:** 0.8.0-draft
 **Architecture baseline:** EpilykosOS Appliance Architecture v0.5, superseded where the 2026-10-17 v1 decision review specifies otherwise.
 **Hardware:** Pi 3 Model B reference target; Pi 4 then Pi 5 later best-effort targets.
 **Scope:** Track 2 appliance only. Ordinary Docker Compose deployment remains a separate product.
@@ -432,13 +432,14 @@ Contract validation is not a boot test and does not automatically turn a green b
 - Appliance images MUST trust the release RAUC CA; developer images MAY additionally trust a development CA according to documented policy.
 - The private release signing key MUST NOT be embedded in images or repositories.
 - Invalid signatures, unsigned bundles and untrusted signers MUST be rejected before writing an update slot. Corrupt streamed payload content MUST prevent successful activation.
-- RAUC public trust anchors MUST be embedded in each OS slot. Production images trust only the release CA; developer trust policy MUST be explicit, with no dashboard verification bypass.
+- RAUC trust anchors MUST come from the offline-root-signed channel trust policy kept in the redundant U-Boot environment and verified against the root public key pinned on BOOT, so a revocation survives OS rollback and DATA loss; there is no slot-local fallback keyring. Stable policies trust only the release CA; developer trust policy MUST be explicit, with no dashboard verification bypass.
+- The actual bundle signer's SPKI MUST be in the policy's allowlist, and every package MUST carry a signed authorization entry from a delegated index key listed in the current policy, which the bundle's signed manifest ([meta.epilykos]) agrees with. Trust epochs never decrease. Certificates are checked at the bundle's signing time; revocation is by policy, never by certificate expiry.
 - Keep CA private keys offline with a protected recoverable backup and a separate protected CI release signer. App-manifest, RAUC and future secure-boot keys MUST remain separate.
 - Online, upload and USB installation MUST apply identical authenticity and board checks. Test offline certificate-time handling, validity/rotation and recovery trust without silently disabling validation.
 
 **Implementation status**
 
-- No RAUC keyring, signed OS bundle publication or OS install API is implemented yet; installation is intentionally refused. Signing/trust policy is approved, not proven.
+- Protocol-2 cards: verity bundles, the shared root-signed policy and its generated RAUC keyring, delegated entries and the signer allowlist are implemented with real RAUC 1.15.2 and guarded fw-tools tests (epilykos_os_trust, tools/test_os_bundle.py); Settings installs through os_install (epilykos_os_update). Production keys, publication and hardware install evidence are pending. Protocol-1 cards have no keyring and refuse every bundle.
 
 **Required evidence**
 
@@ -743,6 +744,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - The container MUST reach these host actions through one narrow host interface that accepts only these named actions; it MUST NOT gain general root access to the host.
 - The application's first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator password.
 - Settings MUST also check for and install application updates through the same interface (update_status, update_check, update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
+- On protocol-2 cards Settings MUST check for and install OS updates through the same interface (os_status, os_check, os_install, os_cancel, os_dismiss) under C-UPDATE-001; a host worker does the work. While a job is installing, ready or needs reconciling, the host refuses conflicting actions (restart, shut down, factory reset, port changes, app updates) according to its guard, which the app reads from a read-only mount.
 - Settings MUST let the administrator change the dashboard's port (set_port), 80 or 1024-65535 and free on the box; the port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
 - A forgotten dashboard password MUST be replaceable with physical access only, never over the network: dashboard-password.txt on BOOT (read once before the app starts, then deleted) or epilykos-reset-password on the console.
 - A factory reset MUST erase everything on DATA and nothing else, asked for with the word ERASE from settings (factory_reset), the console (epilykos-factory-reset) or factory-reset.txt on BOOT; it is carried out before DATA is mounted on the next boot, and the request is deleted only after DATA has been rewritten and never carried out twice.
@@ -1023,6 +1025,11 @@ The plan progress table tracks implementation PRs separately from hardware resul
 The approved scope is a contract for implementation, not a claim the platform is complete. Boot-chain and independent recovery feasibility are outstanding until proven, signing keys are not generated by documentation, and queued features stay pending. Rootfs read-only policy is not secure boot or cryptographic integrity. Direct SD modification/physical media failure is outside the deferred verified-boot guarantee.
 
 ## 12. Changelog
+
+### 0.8.0-draft
+
+- C-UPDATE-001: RAUC trust comes from the offline-root-signed policy in the U-Boot environment (root pinned on BOOT), not slot-local anchors; signer SPKI allowlist, signed per-package authorization, signing-time certificate checks.
+- C-HOST-001: OS update actions (os_status, os_check, os_install, os_cancel, os_dismiss) and the guard that refuses conflicting maintenance during a job.
 
 ### 0.7.2-draft
 

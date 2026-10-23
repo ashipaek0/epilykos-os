@@ -68,8 +68,8 @@ For every implementation task: create its focused regression first, run it and o
 | 2. Slot-contained Linux | M | 1 | Pending; distinct ROOT kernels, checked counters, terminal halt |
 | 3. Every-boot health and watchdog | M | 2 | Pending; normal boot refresh, kernel/app/hang reset, bounded fallback |
 | 4. Shared trust and packages | M | 1 | In progress: shared policy/entry/bundle verification, generated keyring, verity bundles and real RAUC 1.15.2 / guarded fw-tools tests ([evidence](../../evidence/os-updates/signed-packages.md)); production keys and on-box install pending |
-| 5. Host staging and admission | M | 4 | Pending; byte/hash/space/ownership proofs |
-| 6. RAUC transaction and durable guard | M | 2–5 | Pending; worker-kill/RAUC-live concurrency tests |
+| 5. Host staging and admission | M | 4 | In progress: admission, owned resumable staging and space checks with host tests ([evidence](../../evidence/os-updates/installer.md)); hardware measurements pending |
+| 6. RAUC transaction and durable guard | M | 2–5 | In progress: worker, journal, RAUC transaction identity, independent slot check, guard and hostd refusals ([evidence](../../evidence/os-updates/installer.md)); app guard-v1 and spare-card kill/power cases pending |
 | 7. Activation, reconciliation and app safety | M | 3, 6 | Pending; success/failure/OS-app matrix and crash cuts |
 | 8. Settings end-to-end online update | M | 5–7, paired app capability | Pending; authenticated UI → real host job → reboot result |
 | 9. Authenticated offline imports | M | 4–8 | Pending; network-blocked upload/USB installation |

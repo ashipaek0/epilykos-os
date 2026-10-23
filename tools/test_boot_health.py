@@ -45,17 +45,18 @@ class Sim:
     """A boot: userspace started at t=0; ticks of health.TICK_S."""
 
     def __init__(self, *, data_at=10, podman_ok=True, healthy_at=60, env='BOOT_ORDER=A B\n', env_code=0,
-                 slot='A', coordinator=False, data_failed=False, slow=None):
+                 slot='A', coordinator=False, data_failed=False, slow=None, mark_good_code=0):
         self.now = 0.0
         self.data_at, self.podman_ok, self.healthy_at = data_at, podman_ok, healthy_at
         self.env, self.env_code, self.data_failed, self.slow = env, env_code, data_failed, slow or {}
         self.spawned, self.notes, self.killed = [], [], []
         self.coordinator = coordinator
+        self.recorded, self.mark_good_code = [], mark_good_code
         self.supervisor = health.Supervisor(
             clock=lambda: self.now, start=0.0, spawn=self.spawn, notify=self.notes.append,
             cmdline=f'root=PARTUUID=45504c4b-0{2 if slot == "A" else 3} rauc.slot={slot} ro',
             ismount=lambda path: path == '/data' and self.data_at is not None and self.now >= self.data_at,
-            coordinator_exists=lambda: self.coordinator)
+            coordinator_exists=lambda: self.coordinator, record=self.recorded.append)
 
     def behaviour(self, argv):
         """(finish time, return code, stdout) for a command started now."""
@@ -67,6 +68,8 @@ class Sim:
             return self.now + delay, 0, 'healthy\n' if self.now >= self.healthy_at else 'starting\n'
         if argv == ['fw_printenv']:
             return self.now + delay, self.env_code, self.env
+        if argv == ['rauc', 'status', 'mark-good']:
+            return self.now + delay, self.mark_good_code, ''
         if 'is-failed' in key:
             return self.now + 1, 0 if self.data_failed else 1, ''
         return self.now + delay, 0, ''
@@ -176,6 +179,22 @@ class BootHealthTests(unittest.TestCase):
         sim = Sim(env_code=1)
         self.assertEqual(sim.run(), 'done')
         self.assertNotIn(['rauc', 'status', 'mark-good'], sim.spawned)
+
+    def test_confirmed_ordinary_boot_is_recorded_for_os_update_admission(self):
+        sim = Sim(slot='B')
+        sim.run()
+        self.assertEqual(sim.recorded, ['B'])
+        for failed in (Sim(mark_good_code=1), Sim(env_code=1), Sim(slot='B', env=PENDING_ENV, coordinator=True)):
+            failed.run()
+            self.assertEqual(failed.recorded, [], 'only a confirmed ordinary boot is recorded')
+
+    def test_record_file(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = directory + '/run/os-health.json'
+            health.record_confirmed('A', path)
+            self.assertEqual(json.load(open(path)), {'schema': 1, 'state': 'confirmed', 'slot': 'A'})
 
     def test_no_network_or_inverter_checks(self):
         sim = Sim()

@@ -745,6 +745,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 - The application's first-run setup MUST NOT depend on a code printed to a log: the first visitor sets the administrator password.
 - Settings MUST also check for and install application updates through the same interface (update_status, update_check, update_apply), under C-UPDATE-002 and C-UPDATE-004; the container never chooses or supplies an image digest.
 - On protocol-2 cards Settings MUST check for and install OS updates through the same interface (os_status, os_check, os_install, os_cancel, os_dismiss) under C-UPDATE-001; a host worker does the work. While a job is installing, ready or needs reconciling, the host refuses conflicting actions (restart, shut down, factory reset, port changes, app updates) according to its guard, which the app reads from a read-only mount.
+- A ready OS update MUST finish only through its own Restart (os_restart) or Discard (os_discard); a generic restart is refused until then. Restart revalidates trust, space, app and the installed slot, records its intent in the redundant environment before activating the slot for one trial, and the new version is confirmed only once healthy (C-BOOT-003). A failed trial falls back without raising the OS floor.
 - Settings MUST let the administrator change the dashboard's port (set_port), 80 or 1024-65535 and free on the box; the port is kept on DATA, the default is 3000, and the host restarts the container on the new port.
 - A forgotten dashboard password MUST be replaceable with physical access only, never over the network: dashboard-password.txt on BOOT (read once before the app starts, then deleted) or epilykos-reset-password on the console.
 - A factory reset MUST erase everything on DATA and nothing else, asked for with the word ERASE from settings (factory_reset), the console (epilykos-factory-reset) or factory-reset.txt on BOOT; it is carried out before DATA is mounted on the next boot, and the request is deleted only after DATA has been rewritten and never carried out twice.
@@ -1029,7 +1030,7 @@ The approved scope is a contract for implementation, not a claim the platform is
 ### 0.8.0-draft
 
 - C-UPDATE-001: RAUC trust comes from the offline-root-signed policy in the U-Boot environment (root pinned on BOOT), not slot-local anchors; signer SPKI allowlist, signed per-package authorization, signing-time certificate checks.
-- C-HOST-001: OS update actions (os_status, os_check, os_install, os_cancel, os_dismiss) and the guard that refuses conflicting maintenance during a job.
+- C-HOST-001: OS update actions (os_status, os_check, os_install, os_cancel, os_dismiss, os_restart, os_discard) and the guard that refuses conflicting maintenance during a job.
 
 ### 0.7.2-draft
 

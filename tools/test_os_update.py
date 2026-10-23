@@ -80,9 +80,14 @@ FAKE_TOOL = textwrap.dedent('''\
     if tool == 'fw_printenv':
         print(''.join(f'{k}={v}\\n' for k, v in env.items()), end='')
     elif tool == 'fw_setenv':
+        if state.get('setenv_fails'):
+            sys.exit(1)
         for line in sys.stdin.read().splitlines():
             name, _, value = line.partition(' ')
-            env[name] = value
+            if value:
+                env[name] = value
+            else:
+                env.pop(name, None)
         store(state)
     elif tool == 'systemctl':
         if args[:2] == ['is-active', '--quiet']:
@@ -106,9 +111,21 @@ FAKE_TOOL = textwrap.dedent('''\
     elif tool == 'podman':
         print(json.dumps([state['container']]))
     elif tool == 'rauc':
+        slot = lambda name: {'rootfs.0': 'A', 'rootfs.1': 'B'}.get(name) or \
+            (state.get('booted', 'A') if name == 'booted' else ('B' if state.get('booted', 'A') == 'A' else 'A'))
+        if args[:2] == ['status', 'mark-active'] and state.get('mark_active_works', True):
+            chosen = slot(args[2])
+            env['BOOT_ORDER'] = chosen + ' ' + ('B' if chosen == 'A' else 'A')
+            env['BOOT_' + chosen + '_LEFT'] = '3'
+            store(state)
+            sys.exit(0)
+        if args[:2] == ['status', 'mark-good']:
+            env['BOOT_' + slot(args[2]) + '_LEFT'] = '3'
+            store(state)
+            sys.exit(0)
         if args[:2] == ['status', 'mark-bad']:
             if state.get('mark_bad_works', True):
-                env['BOOT_' + ('A' if args[2] == 'rootfs.0' else 'B') + '_LEFT'] = '0'
+                env['BOOT_' + slot(args[2]) + '_LEFT'] = '0'
                 store(state)
             sys.exit(0)
         if args[0] == 'install':

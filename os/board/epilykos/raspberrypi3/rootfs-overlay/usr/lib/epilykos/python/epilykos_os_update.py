@@ -183,6 +183,20 @@ def blocking():
     return 'active' if job and job['state'] in WORKING + ('installing',) else 'idle'
 
 
+def refuse_reboot():
+    """A generic restart or shutdown is refused while installing, while
+    checking, and while a job is ready: that one finishes only through its
+    own Restart or Discard. During the trial it is allowed."""
+    refuse_if('active', 'reconciling', action='Restarting or shutting down')
+    if blocking() == 'pending':
+        try:
+            job = journal()
+        except OsUpdateError:
+            job = None
+        if not job or job['state'] in ('ready', 'restarting'):
+            raise OsUpdateError('An OS update is ready: use Restart to finish or Discard in Settings > Updates.')
+
+
 def refuse_if(*states, action):
     state = blocking()
     if state in states:
@@ -454,7 +468,7 @@ def start_worker():
 
 def ensure_worker(job):
     """A job whose worker went away (power, crash) resumes on the next look."""
-    if job and job['state'] in WORKING + ('installing',) and not worker_active():
+    if job and job['state'] in WORKING + ('installing', 'restarting') and not worker_active():
         start_worker()
 
 
@@ -511,7 +525,7 @@ def cancelled(job):
 
 def run_worker():
     job = journal()
-    if not job or job['state'] not in WORKING + ('installing',):
+    if not job or job['state'] not in WORKING + ('installing', 'restarting'):
         return 0
     if job['state'] in WORKING and cancelled(job):
         finish(job, 'cancelled', None)
@@ -530,6 +544,9 @@ def run_worker():
         set_guard('active', job['id'])
         if job['state'] == 'installing':
             return reconcile_install(job)
+        if job['state'] == 'restarting':
+            import epilykos_os_activate as activation
+            return activation.activate(job)
         return work(job)
     finally:
         lease.close()

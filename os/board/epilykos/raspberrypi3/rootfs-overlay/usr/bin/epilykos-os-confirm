@@ -1,0 +1,9 @@
+#!/usr/bin/python3
+"""Confirm a healthy OS update trial (called by epilykos-boot-health;
+epilykos_os_activate.confirm_candidate)."""
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_os_activate  # noqa: E402
+
+sys.exit(epilykos_os_activate.confirm_main(sys.argv[1:]))

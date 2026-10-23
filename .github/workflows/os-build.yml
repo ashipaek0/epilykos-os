@@ -222,6 +222,11 @@ jobs:
           # setup tools run on (with dbus-fast for Bluetooth).
           ls "$TARGET_DIR"/lib/firmware/brcm/brcmfmac43430-sdio*.bin >/dev/null || { echo "Wi-Fi firmware missing"; exit 1; }
           ls "$TARGET_DIR"/lib/firmware/brcm/BCM43430A1*.hcd >/dev/null || { echo "Bluetooth firmware missing"; exit 1; }
+          # Bluetooth UART speed cap (C-RUNTIME-003): the patched driver and its setting.
+          HCI_UART=$(find "$TARGET_DIR/lib/modules" -name 'hci_uart.ko*' | head -1)
+          test -n "$HCI_UART" || { echo "hci_uart module missing"; exit 1; }
+          modinfo -F parm "$HCI_UART" | grep -q '^max_speed:' || { echo "hci_uart has no max_speed option (kernel patch not applied)"; exit 1; }
+          grep -qx 'options hci_uart max_speed=921600' "$TARGET_DIR/etc/modprobe.d/epilykos-bluetooth.conf" || { echo "Bluetooth UART speed not set"; exit 1; }
           test -f "$TARGET_DIR/lib/firmware/regulatory.db" || { echo "wireless regulatory database missing"; exit 1; }
           ls -d "$TARGET_DIR"/usr/lib/python3*/site-packages/dbus_fast >/dev/null || { echo "dbus-fast missing"; exit 1; }
           test -x "$TARGET_DIR/usr/bin/iw" || { echo "iw missing"; exit 1; }

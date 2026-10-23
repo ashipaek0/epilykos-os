@@ -1,6 +1,6 @@
 metadata:
   document: EPILYKOS-OS-CONTRACTS
-  version: 0.7.1-draft
+  version: 0.7.2-draft
   architecture_baseline: EpilykosOS Appliance Architecture v0.5
   hardware_tiers:
     tier_1_tested: Raspberry Pi 3 Model B (1 GB) — the maintainer-owned board; all release-gating hardware evidence comes
@@ -325,6 +325,14 @@ contracts:
   - 'Tier 1 image: the onboard BCM43438 comes up through the mainline device tree''s serdev node on the PL011 (hci_uart
     + hci_bcm, BCM43430A1.hcd from brcmfmac_sdio-firmware-rpi); bluetoothd is enabled; the container gets /run/dbus
     read-only and no capabilities. BlueZ 5.79''s default D-Bus policy already lets non-root callers reach org.bluez.'
+  - 'UART speed: the mainline bcm2837-rpi-3-b device tree runs the BCM43438 at 2000000 baud with no hardware flow
+    control; on the board that overran the PL011 (oe in /proc/tty/driver/ttyAMA, "Frame reassembly failed (-84)", HCI
+    command timeouts) and left BlueZ refusing every connect and scan with org.bluez.Error.InProgress. A kernel patch
+    adds hci_uart.max_speed and /etc/modprobe.d/epilykos-bluetooth.conf sets 921600, in the root filesystem so OS
+    updates carry it (the device tree on BOOT is not updated).'
+  - 'Recovery: hostd bluetooth_recover (reasons in_progress, no_adapter) restarts bluetoothd, at most once per 10
+    minutes (/run/epilykos/bluetooth-recover); the application asks for it when every Bluetooth device is refused with
+    InProgress, or no adapter is found, for two minutes. Restarting bluetoothd cleared the stuck state on the board.'
   - The appliance container uses host networking (unlike the Track 1 bridge baseline) so the app is served on port
     3000 of the box (or the port chosen in settings, C-HOST-001) and Tuya LAN discovery works; Bluetooth access
     is unchanged by it. Hardware confirmation is still the Stage 3 spike.
@@ -1197,6 +1205,11 @@ decision_governance:
   late_added_rule: A decision added in a later contract revision receives the same review and gating semantics as an older
     decision; revision age has no effect on priority.
 changelog:
+- version: 0.7.2-draft
+  changes:
+  - 'C-RUNTIME-003: the Pi 3B Bluetooth UART runs at 921600 baud (hci_uart.max_speed, kernel patch) instead of the
+    device tree''s 2000000 without flow control, which lost bytes; hostd bluetooth_recover restarts a stuck BlueZ at
+    most once per 10 minutes.'
 - version: 0.7.1-draft
   changes:
   - 'C-HOST-001: factory reset (settings, console, or factory-reset.txt on BOOT saying ERASE) erases DATA on the next

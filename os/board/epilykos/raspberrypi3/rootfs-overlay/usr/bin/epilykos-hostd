@@ -26,6 +26,8 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "bluetooth_pair", "address": "AA:BB:CC:DD:EE:FF"}
     {"action": "bluetooth_reply", "id": "...", "value": "1234"}   PIN, passkey or true
     {"action": "bluetooth_remove", "address": "AA:BB:CC:DD:EE:FF"}
+    {"action": "bluetooth_recover", "reason": "in_progress"}   restart a stuck BlueZ
+                                                (or "no_adapter"); at most once per 10 min
     {"action": "update_status"}                 installing? how did the last update end?
     {"action": "update_check"}                  is a newer signed app release out?
     {"action": "update_apply", "target": "app"} install it (replies at once, then works)
@@ -106,6 +108,8 @@ def network_status():
 
 def handle(req):
     action = req.get('action')
+    if action == 'bluetooth_recover':
+        return bluetooth.recover(req.get('reason'))
     if action in BLUETOOTH_ACTIONS:
         return bluetooth.action(action, req)
     if action == 'status':

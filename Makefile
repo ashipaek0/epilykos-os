@@ -19,6 +19,8 @@ test-native-env:
 ## Self-test the validator against deliberately broken fixtures.
 test:
 	$(PYTHON) tools/test_platform_env.py
+	$(PYTHON) tools/test_bootstrap_adoption.py
+	$(PYTHON) tools/test_os_slot_acceptance.py
 	$(PYTHON) tools/test_release_gates.py
 	$(PYTHON) tools/test_image_permissions.py
 	$(PYTHON) tools/test_validate_contracts.py

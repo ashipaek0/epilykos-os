@@ -162,6 +162,9 @@ def main():
                 raise ValueError(f"guard missing from actual ARM64 {obj}.o")
         for report in sorted((uboot / "env").glob("*.su")):
             print(report.name + "\n" + report.read_text(), flush=True)
+        run([*make, "u-boot-initial-env"])
+        run([sys.executable, ROOT / "tools/test_bootstrap_adoption.py",
+             "--defaults", uboot / "u-boot-initial-env"])
         # Minimal real RAUC CLI build: bootchooser code, no daemon/network/bundles.
         env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(work)}
         rauc_build = work / "rauc-build"

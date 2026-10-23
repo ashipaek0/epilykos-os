@@ -64,7 +64,7 @@ For every implementation task: create its focused regression first, run it and o
 
 | Task | Size | Dependencies | Status / exit evidence |
 |---|---|---|---|
-| 1. Track A bootstrap and env state | M | Design approval; baseline sync done | In progress: native core, opt-in loader/fw-tools integration and real RAUC fault tests; full image/Pi evidence, final target budget, bootstrap/adoption and hardware runner pending |
+| 1. Track A bootstrap and env state | M | Design approval; baseline sync done | In progress: native guard/RAUC tests, host seed generation and generated-default budget, strict legacy export/preflight and manual evidence recorder; image/Pi proof, actual adoption and final runtime budget pending |
 | 2. Slot-contained Linux | M | 1 | Pending; distinct ROOT kernels, checked counters, terminal halt |
 | 3. Every-boot health and watchdog | M | 2 | Pending; normal boot refresh, kernel/app/hang reset, bounded fallback |
 | 4. Shared trust and packages | M | 1 | Pending; delegation/revocation across both slots and real RAUC fixtures |

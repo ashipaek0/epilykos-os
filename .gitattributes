@@ -1,0 +1,2 @@
+# Unified patch context has an intrinsic leading space before tabs/blank lines.
+os/board/epilykos/raspberrypi3/patches/**/*.patch -whitespace

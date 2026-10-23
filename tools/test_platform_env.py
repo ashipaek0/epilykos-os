@@ -258,6 +258,32 @@ class PlatformEnvTests(unittest.TestCase):
         self.put(record(state()), record(state(epk_trust_policy_sig="AA=="), 2))
         self.run_native("select", ok=False)
 
+    def test_native_snapshot_diff_advances_generation_and_rejects_stale_export(self):
+        self.put(record(state()), record(state(), 2))
+        desired = Path(self.temp.name) / "desired.env"
+        desired.write_bytes(record(state(floor="13", BOOT_A_LEFT="2")))
+        self.run_native("commit-snapshot", str(desired))
+        for raw in self.copies():
+            values = decode(raw)
+            self.assertEqual(values[b"epk_state_generation"], b"8")
+            self.assertEqual(values[b"epk_os_floor"], b"13")
+            self.assertEqual(values[b"BOOT_A_LEFT"], b"2")
+        before = self.copies()
+        desired.write_bytes(record(state(floor="14")))  # Still generation 7.
+        self.run_native("commit-snapshot", str(desired), ok=False)
+        self.assertEqual(self.copies(), before)
+
+    def test_native_snapshot_deletions_and_diff_limit_are_atomic(self):
+        self.put(record(state(epk_pending="old")), record(state(epk_pending="old"), 2))
+        desired = Path(self.temp.name) / "desired.env"
+        desired.write_bytes(record(state()))
+        self.run_native("commit-snapshot", str(desired))
+        self.assertTrue(all(b"epk_pending" not in decode(r) for r in self.copies()))
+        before = self.copies()
+        desired.write_bytes(record(state(generation="8", **{f"item_{i}": "v" for i in range(65)})))
+        self.run_native("commit-snapshot", str(desired), ok=False)
+        self.assertEqual(self.copies(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

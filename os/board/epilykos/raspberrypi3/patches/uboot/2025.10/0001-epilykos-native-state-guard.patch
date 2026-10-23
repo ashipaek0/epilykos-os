@@ -1,0 +1,213 @@
+From: ashipaek0 <folabiklan@gmail.com>
+Subject: [PATCH] Enforce Epilykos native platform-state guard when enabled
+
+The shared core is copied from the board directory by Buildroot hooks.
+The feature remains opt-in until the paired protocol-2 bootstrap is ready.
+
+Upstream: not applicable (Epilykos platform ABI)
+
+--- a/env/Makefile
++++ b/env/Makefile
+@@ -9,6 +9,7 @@
+ obj-$(CONFIG_$(PHASE_)ENV_SUPPORT) += flags.o
+ 
+ ifndef CONFIG_XPL_BUILD
++obj-$(CONFIG_EPILYKOS_ENV_GUARD) += epk_env.o
+ obj-y += callback.o
+ obj-$(CONFIG_ENV_IS_IN_EEPROM) += eeprom.o
+ obj-$(CONFIG_ENV_IS_IN_EEPROM) += embedded.o
+--- a/env/Kconfig
++++ b/env/Kconfig
+@@ -2,6 +2,16 @@
+ 
+ config ENV_SUPPORT
+ 	def_bool y
++
++config EPILYKOS_ENV_GUARD
++	bool "Epilykos protocol-2 native platform-state guard"
++	depends on ENV_IS_IN_MMC && ENV_REDUNDANT && CMD_SAVEENV && ARM64
++	depends on !SPL && !TPL
++	help
++	  Require seeded Pi3 16 KiB redundant MMC state. Select the newest
++	  consistent critical generation before import and verify both records
++	  after every saveenv. Refuse defaults, ambiguous state and env erase.
++	  Enable only with the paired guarded fw-tools/bootstrap image.
+ 
+ config ENV_SOURCE_FILE
+ 	string "Environment file to use"
+--- a/env/common.c
++++ b/env/common.c
+@@ -24,6 +24,12 @@
+ #include <dm/ofnode.h>
+ #include <net.h>
+ #include <watchdog.h>
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++#include <epk_env.h>
++static int epk_ready;
++int epk_env_is_ready(void) { return epk_ready; }
++void epk_env_set_ready(int ready) { epk_ready = ready; }
++#endif
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -387,6 +393,9 @@
+ 
+ void env_set_default(const char *s, int flags)
+ {
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	epk_env_set_ready(0);
++#endif
+ 	if (s) {
+ 		if ((flags & H_INTERACTIVE) == 0) {
+ 			printf("*** Warning - %s, "
+@@ -481,6 +490,25 @@
+ 
+ 	tmp_env1 = (env_t *)buf1;
+ 	tmp_env2 = (env_t *)buf2;
++
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	{
++		static const unsigned char unreadable[EPK_ENV_SIZE];
++		struct epk_env_selection selected;
++		int result;
++		epk_env_set_ready(0);
++		result = epk_env_select(buf1_read_fail ? unreadable : (const unsigned char *)buf1,
++					buf2_read_fail ? unreadable : (const unsigned char *)buf2,
++					&selected);
++		if (result) {
++			gd->env_valid = ENV_INVALID;
++			printf("Epilykos env selection refused: %d\n", result);
++			return -ENOMSG;
++		}
++		gd->env_valid = selected.index ? ENV_REDUND : ENV_VALID;
++		return 0;
++	}
++#endif
+ 
+ 	if (buf1_read_fail && buf2_read_fail) {
+ 		puts("*** Error - No Valid Environment Area found\n");
+@@ -545,7 +573,11 @@
+ 
+ 	env_flags = ep->flags;
+ 
+-	return env_import((char *)ep, 0, flags);
++	ret = env_import((char *)ep, 0, flags);
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	epk_env_set_ready(!ret);
++#endif
++	return ret;
+ }
+ #endif /* CONFIG_ENV_REDUNDANT */
+ 
+--- a/env/mmc.c
++++ b/env/mmc.c
+@@ -311,6 +311,20 @@
+ 	mmc_set_env_part_restore(mmc);
+ }
+ 
++static inline int read_env(struct mmc *mmc, unsigned long size,
++			   unsigned long offset, const void *buffer)
++{
++	uint blk_start, blk_cnt, n;
++	struct blk_desc *desc = mmc_get_blk_desc(mmc);
++
++	blk_start	= ALIGN(offset, mmc->read_bl_len) / mmc->read_bl_len;
++	blk_cnt		= ALIGN(size, mmc->read_bl_len) / mmc->read_bl_len;
++
++	n = blk_dread(desc, blk_start, blk_cnt, (uchar *)buffer);
++
++	return (n == blk_cnt) ? 0 : -1;
++}
++
+ #if defined(CONFIG_CMD_SAVEENV) && !defined(CONFIG_XPL_BUILD)
+ static inline int write_env(struct mmc *mmc, unsigned long size,
+ 			    unsigned long offset, const void *buffer)
+@@ -325,6 +339,11 @@
+ 
+ 	return (n == blk_cnt) ? 0 : -1;
+ }
++
++
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++#include "epk_mmc.c"
++#endif
+ 
+ static int env_mmc_save(void)
+ {
+@@ -337,6 +356,9 @@
+ 
+ 	errmsg = init_mmc_for_env(mmc);
+ 	if (errmsg) {
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++		epk_env_set_ready(0);
++#endif
+ 		printf("%s\n", errmsg);
+ 		return 1;
+ 	}
+@@ -344,6 +366,11 @@
+ 	ret = env_export(env_new);
+ 	if (ret)
+ 		goto fini;
++
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	ret = epk_mmc_save(mmc, env_new);
++	goto fini;
++#endif
+ 
+ 	if (IS_ENABLED(CONFIG_ENV_REDUNDANT)) {
+ 		if (gd->env_valid == ENV_VALID)
+@@ -374,6 +401,10 @@
+ 		gd->env_valid = gd->env_valid == ENV_REDUND ? ENV_VALID : ENV_REDUND;
+ 
+ fini:
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	if (ret)
++		epk_env_set_ready(0);
++#endif
+ 	fini_mmc_for_env(mmc);
+ 
+ 	return ret;
+@@ -399,6 +430,10 @@
+ 
+ static int env_mmc_erase(void)
+ {
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	puts("Epilykos platform state cannot be erased; authenticated repair required\n");
++	return CMD_RET_FAILURE;
++#endif
+ 	int dev = mmc_get_env_dev();
+ 	struct mmc *mmc = find_mmc_device(dev);
+ 	int	ret, copy = 0;
+@@ -442,19 +477,6 @@
+ }
+ #endif /* CONFIG_CMD_SAVEENV && !CONFIG_XPL_BUILD */
+ 
+-static inline int read_env(struct mmc *mmc, unsigned long size,
+-			   unsigned long offset, const void *buffer)
+-{
+-	uint blk_start, blk_cnt, n;
+-	struct blk_desc *desc = mmc_get_blk_desc(mmc);
+-
+-	blk_start	= ALIGN(offset, mmc->read_bl_len) / mmc->read_bl_len;
+-	blk_cnt		= ALIGN(size, mmc->read_bl_len) / mmc->read_bl_len;
+-
+-	n = blk_dread(desc, blk_start, blk_cnt, (uchar *)buffer);
+-
+-	return (n == blk_cnt) ? 0 : -1;
+-}
+ 
+ static int env_mmc_load_redundant(void)
+ {
+@@ -490,6 +512,12 @@
+ 			goto fini;
+ 	}
+ 
++#ifdef CONFIG_EPILYKOS_ENV_GUARD
++	if (!epk_mmc_layout(mmc)) {
++		ret = -EINVAL;
++		goto fini;
++	}
++#endif
+ 	read1_fail = read_env(mmc, CONFIG_ENV_SIZE, offset1, tmp_env1);
+ 
+ 	if (mmc_env_is_redundant_in_both_boot_hwparts(mmc)) {

@@ -3,7 +3,12 @@
 #define EPK_ENV_H
 
 #include <stddef.h>
+#ifdef __UBOOT__
+#include <linux/types.h>
+#include <limits.h>
+#else
 #include <stdint.h>
+#endif
 
 /* Pi 3B native redundant MMC environment ABI. No extra on-card region. */
 #define EPK_ENV_SIZE 16384u
@@ -63,5 +68,19 @@ int epk_env_select(const unsigned char a[EPK_ENV_SIZE],
 int epk_env_commit(const struct epk_env_io *io,
 		   const struct epk_env_update *updates, size_t count,
 		   struct epk_env_selection *out);
+
+/* Adapter for native env_export/fw-env snapshots. The desired record must
+ * retain the selected generation: stale or explicitly changed generations
+ * are refused. Diffing and automatic generation advancement share commit's
+ * rules. The caller holds the SAME lock across initial import and this call.
+ */
+int epk_env_commit_snapshot(const struct epk_env_io *io,
+			    const unsigned char desired[EPK_ENV_SIZE],
+			    struct epk_env_selection *out);
+
+#ifdef CONFIG_EPILYKOS_ENV_GUARD
+int epk_env_is_ready(void);
+void epk_env_set_ready(int ready);
+#endif
 
 #endif

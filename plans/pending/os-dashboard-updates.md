@@ -50,7 +50,8 @@ It still gates any claim of full independent/early boot recovery.
 ## Tracking and verification conventions
 
 All tasks below remain **incomplete**. Task 1's first implementation slice
-adds the portable native-env core and `tools/test_platform_env.py`; its
+adds the portable native-env core and `tools/test_platform_env.py`, followed
+by opt-in native U-Boot/fw-tools integration and `make test-native-env`; its
 [delivery status](../decisions/pi3-update-bootstrap.md) distinguishes tested
 primitives from pending target integration. Other proposed test modules/commands
 are not evidence of passing behavior. Existing checks: OS `make test contracts`,
@@ -63,7 +64,7 @@ For every implementation task: create its focused regression first, run it and o
 
 | Task | Size | Dependencies | Status / exit evidence |
 |---|---|---|---|
-| 1. Track A bootstrap and env state | M | Design approval; baseline sync done | In progress: native core/fault tests; native integration, final target budget, bootstrap/adoption and hardware runner pending |
+| 1. Track A bootstrap and env state | M | Design approval; baseline sync done | In progress: native core, opt-in loader/fw-tools integration and real RAUC fault tests; full image/Pi evidence, final target budget, bootstrap/adoption and hardware runner pending |
 | 2. Slot-contained Linux | M | 1 | Pending; distinct ROOT kernels, checked counters, terminal halt |
 | 3. Every-boot health and watchdog | M | 2 | Pending; normal boot refresh, kernel/app/hang reset, bounded fallback |
 | 4. Shared trust and packages | M | 1 | Pending; delegation/revocation across both slots and real RAUC fixtures |

@@ -81,6 +81,13 @@ int main(int argc, char **argv)
 			if (equals) *equals = 0;
 		}
 		status = epk_env_commit(&io, updates, (size_t)(argc - 3), &selected);
+	} else if (!strcmp(argv[1], "commit-snapshot") && argc == 4) {
+		int snapshot = open(argv[3], O_RDONLY);
+		if (snapshot >= 0) {
+			if (read(snapshot, records[0], EPK_ENV_SIZE) == EPK_ENV_SIZE)
+				status = epk_env_commit_snapshot(&io, records[0], &selected);
+			close(snapshot);
+		}
 	}
 	close(backend.fd);
 	if (status) {

@@ -339,21 +339,14 @@ static int build(const unsigned char *source, const struct epk_env_update *updat
 	return EPK_ENV_OK;
 }
 
-int epk_env_commit(const struct epk_env_io *io, const struct epk_env_update *updates,
-		   size_t count, struct epk_env_selection *out)
+static int commit_loaded(const struct epk_env_io *io, unsigned char records[2][EPK_ENV_SIZE],
+			 struct epk_env_selection chosen, const struct epk_env_update *updates,
+			 size_t count, struct epk_env_selection *out)
 {
-	unsigned char records[2][EPK_ENV_SIZE], next[EPK_ENV_SIZE];
-	struct epk_env_selection chosen;
+	unsigned char next[EPK_ENV_SIZE];
 	unsigned int pass, index;
 	unsigned char flag;
 	int status;
-	if (!io || !io->read || !io->write || !out || count > EPK_ENV_MAX_UPDATES ||
-	    (count && !updates))
-		return EPK_ENV_INVALID;
-	if (io->read(io->context, 0, records[0]) || io->read(io->context, 1, records[1]))
-		return EPK_ENV_IO;
-	status = epk_env_select(records[0], records[1], &chosen);
-	if (status) return status;
 	status = build(records[chosen.index], updates, count, next);
 	if (status) return status;
 	flag = records[chosen.index][4];
@@ -378,4 +371,77 @@ int epk_env_commit(const struct epk_env_io *io, const struct epk_env_update *upd
 	    memcmp(records[1] + 5, next + 5, DATA_SIZE))
 		return EPK_ENV_IO;
 	return epk_env_select(records[0], records[1], out);
+}
+
+static int load(const struct epk_env_io *io, unsigned char records[2][EPK_ENV_SIZE],
+		struct epk_env_selection *chosen)
+{
+	if (!io || !io->read || !io->write || !chosen)
+		return EPK_ENV_INVALID;
+	if (io->read(io->context, 0, records[0]) || io->read(io->context, 1, records[1]))
+		return EPK_ENV_IO;
+	return epk_env_select(records[0], records[1], chosen);
+}
+
+int epk_env_commit(const struct epk_env_io *io, const struct epk_env_update *updates,
+		   size_t count, struct epk_env_selection *out)
+{
+	unsigned char records[2][EPK_ENV_SIZE];
+	struct epk_env_selection chosen;
+	int status;
+	if (!out || count > EPK_ENV_MAX_UPDATES || (count && !updates))
+		return EPK_ENV_INVALID;
+	status = load(io, records, &chosen);
+	if (status) return status;
+	return commit_loaded(io, records, chosen, updates, count, out);
+}
+
+static int add_diff(struct epk_env_update *updates, size_t *count, char *names,
+		    size_t *used, const struct entry *entry, const char *value)
+{
+	if (*count == EPK_ENV_MAX_UPDATES || entry->name_size + 1 > EPK_ENV_SIZE - *used)
+		return EPK_ENV_CAPACITY;
+	memcpy(names + *used, entry->name, entry->name_size);
+	names[*used + entry->name_size] = 0;
+	updates[*count].name = names + *used;
+	updates[(*count)++].value = value;
+	*used += entry->name_size + 1;
+	return EPK_ENV_OK;
+}
+
+int epk_env_commit_snapshot(const struct epk_env_io *io,
+			    const unsigned char desired[EPK_ENV_SIZE],
+			    struct epk_env_selection *out)
+{
+	unsigned char records[2][EPK_ENV_SIZE];
+	char names[EPK_ENV_SIZE];
+	struct epk_env_selection chosen;
+	struct epk_env_update updates[EPK_ENV_MAX_UPDATES];
+	struct view old, next;
+	size_t i, count = 0, used = 0;
+	int status;
+	if (!desired || !out || !crc_valid(desired))
+		return EPK_ENV_INVALID;
+	status = parse(desired, &next);
+	if (status) return status;
+	status = load(io, records, &chosen);
+	if (status) return status;
+	if (next.generation != chosen.generation)
+		return EPK_ENV_CONFLICT;
+	status = parse(records[chosen.index], &old);
+	if (status) return status;
+	for (i = 0; i < old.count; ++i) {
+		const struct entry *entry = &old.entries[i];
+		const char *value = equivalent(&next, entry);
+		if ((!value || strcmp(value, entry->value)) &&
+		    (status = add_diff(updates, &count, names, &used, entry, value)))
+			return status;
+	}
+	for (i = 0; i < next.count; ++i) {
+		const struct entry *entry = &next.entries[i];
+		if (!equivalent(&old, entry) &&
+		    (status = add_diff(updates, &count, names, &used, entry, entry->value)))
+			return status;
+	}
+	return commit_loaded(io, records, chosen, updates, count, out);
 }

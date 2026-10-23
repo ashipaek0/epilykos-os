@@ -650,6 +650,7 @@ def _transfer(job, entry, part):
             offset = 0              # Range ignored or the file changed: start again
             validator = response.headers.get('ETag') or response.headers.get('Last-Modified')
             job['validator'] = validator if validator and not validator.startswith('W/') else None
+            save(job)               # durable before the first byte: a cut part can resume
         else:
             raise OsUpdateError(f'The OS update server answered {code}')
         fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -730,18 +731,19 @@ def install_bundle(job, bundle):
     identity['transaction'] = job['id']
     job['rauc'] = identity
     step(job, 'installing', percent=0)          # durable before RAUC is called
-    process = subprocess.Popen([RAUC, 'install', f'--transaction-id={job["id"]}', str(bundle)],
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True)
     last_line, last_save = '', 0.0
-    for line in process.stdout:
-        line = line.strip()
-        if line:
-            last_line = line
-        match = re.match(r'^(\d{1,3})%\s+(.*)$', line)
-        if match and time.monotonic() - last_save >= 2:
-            step(job, 'installing', percent=min(int(match.group(1)), 100), message=match.group(2)[:120])
-            last_save = time.monotonic()
-    code = process.wait()
+    with subprocess.Popen([RAUC, 'install', f'--transaction-id={job["id"]}', str(bundle)],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                          text=True) as process:
+        for line in process.stdout:
+            line = line.strip()
+            if line:
+                last_line = line
+            match = re.match(r'^(\d{1,3})%\s+(.*)$', line)
+            if match and time.monotonic() - last_save >= 2:
+                step(job, 'installing', percent=min(int(match.group(1)), 100), message=match.group(2)[:120])
+                last_save = time.monotonic()
+    code = process.returncode
     if code:
         return fail_install(job, 'The system updater refused or failed the OS update' +
                             (f': {last_line[-160:]}' if last_line else ''))

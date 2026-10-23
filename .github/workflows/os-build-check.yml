@@ -74,8 +74,10 @@ jobs:
           fi
           for unit in "$OVERLAY"/usr/lib/systemd/system/epilykos*.service; do
             name=$(basename "$unit")
-            grep -qx "enable $name" "$OVERLAY"/usr/lib/systemd/system-preset/50-epilykos.preset \
-              || { echo "$name is not enabled in 50-epilykos.preset"; exit 1; }
+            # Every unit is decided explicitly: enabled, or disabled because it
+            # is enabled by the protocol-2 preset or started on demand.
+            grep -Eqx "(enable|disable) $name" "$OVERLAY"/usr/lib/systemd/system-preset/50-epilykos.preset \
+              || { echo "$name is neither enabled nor disabled in 50-epilykos.preset"; exit 1; }
             for cmd in $(sed -n 's/^Exec[A-Za-z]*=-\{0,1\}\(\/usr\/bin\/epilykos[^ ]*\).*/\1/p' "$unit"); do
               test -x "$OVERLAY$cmd" || { echo "$name runs $cmd, which is not in the overlay"; exit 1; }
             done

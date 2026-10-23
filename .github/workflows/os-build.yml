@@ -343,6 +343,34 @@ jobs:
 
           echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
 
+      # A protocol-2 test card also gets a signed OS update package made from
+      # this build's own rootfs (the bytes in ROOT-A/ROOT-B), with the same
+      # TEST-ONLY trust, for installing on a spare card. Verified as a box
+      # would before upload. Maintainer-signed packages are the release job's.
+      - name: OS update package (protocol 2, test trust)
+        id: os-package
+        if: env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'test-trust'
+        run: |
+          set -e
+          IMAGES_DIR=$(dirname "$(find os/build -path '*/output/images/sdcard.img' -print -quit)")
+          HOST_BIN=$(dirname "$IMAGES_DIR")/host/bin
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PATH="$HOST_BIN:$PATH" python3 tools/build_os_bundle.py --rauc "$HOST_BIN/rauc" \
+            --rootfs "$IMAGES_DIR/rootfs.ext4" --output "$RUNNER_TEMP/os-package" \
+            --cert "$EPILYKOS_TRUST_DIR/rauc-signing.pem" --key "$EPILYKOS_TRUST_DIR/private/rauc-signing.key" \
+            --index-key "$EPILYKOS_TRUST_DIR/private/$EPILYKOS_CHANNEL-test-1.key" \
+            --index-key-id "$EPILYKOS_CHANNEL-test-1" --trust "$EPILYKOS_TRUST_DIR" \
+            --url-base "$RUN_URL" --notes-url "$RUN_URL" | tee os-package.json
+          { echo '### OS update package (TEST-ONLY trust)'; echo; echo '```json'; cat os-package.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.os-package.outcome == 'success'
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-test-package
+          path: ${{ runner.temp }}/os-package
+          retention-days: 14
+          if-no-files-found: error
+
       # Uploaded whenever the build itself succeeded, even if a structural
       # check above failed, so a two-hour build is never thrown away; the
       # job still fails in that case.

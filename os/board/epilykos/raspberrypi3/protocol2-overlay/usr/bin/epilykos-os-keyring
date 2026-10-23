@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+"""Write RAUC's keyring from the verified shared trust policy (epilykos_os_trust)."""
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_os_trust  # noqa: E402
+
+sys.exit(epilykos_os_trust.keyring_main())

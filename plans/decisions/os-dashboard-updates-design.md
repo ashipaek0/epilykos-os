@@ -175,8 +175,9 @@ protocol below. App keys remain separate (the existing app-manifest key).
 
 Certificate time: the Pi has no clock until a time server answers, and boxes
 may be offline. *Proposed:* RAUC checks certificates against the bundle's
-signing time (`use-bundle-signing-time`, to be confirmed on RAUC 1.15.2 in
-plan task 4), with long-lived certificates (CA 25 years, signing 5 years).
+signing time (`use-bundle-signing-time`, confirmed on RAUC 1.15.2 in plan
+task 4; the whole chain, CA included, must be valid at that time), with
+long-lived certificates (CA 25 years, signing 5 years).
 This supports offline clocks but expiry no longer limits a compromised key
 that backdates signatures. The shared signed trust policy and mandatory
 package authorization below are therefore required, including offline.

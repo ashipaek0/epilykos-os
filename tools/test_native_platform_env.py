@@ -206,6 +206,81 @@ class NativeEnvTests(unittest.TestCase):
             self.assertEqual(values[b"epk_os_floor"], b"13")
             self.assertEqual(values[b"epk_trust_epoch"], b"3")
 
+    def wrappers(self, fault=""):
+        directory = self.root / "bin"
+        directory.mkdir(exist_ok=True)
+        for name, executable in [("fw_printenv", FW_TOOLS), ("fw_setenv", self.setter)]:
+            wrapper = directory / name
+            prefix = fault if name == "fw_setenv" else ""
+            wrapper.write_text("#!/bin/sh\n" + prefix + "exec " + shlex.quote(str(executable)) +
+                               " -c " + shlex.quote(str(self.config)) + " -l " +
+                               shlex.quote(str(self.root)) + ' "$@"\n')
+            wrapper.chmod(0o755)
+        return directory
+
+    def test_policy_admission_through_the_real_guarded_writers(self):
+        """epilykos_os_trust.admit_policy against the built fw-tools: one
+        batch, generation +1, floor untouched, both copies; a cut between
+        the copies is not acknowledged, and admitting the same policy again
+        completes the replication (no no-op shortcut)."""
+        import base64
+        import os_trust_fixtures as fx
+        from os_trust_fixtures import trust
+        custodian = fx.Trust(self.root / "keys")
+        custodian.index_key("dev-1")
+        custodian.index_key("dev-2")
+        custodian.ca("ca-1")
+        custodian.leaf("leaf-1", "ca-1")
+        p1 = custodian.policy(1, ["dev-1"], ["ca-1"], ["leaf-1"])
+        p2 = custodian.policy(2, ["dev-2"], ["ca-1"], ["leaf-1"])
+        platform = fx.platform()
+
+        def seeded(pair, epoch):
+            return state(generation="7", floor="12", epoch=str(epoch),
+                         epk_trust_policy=base64.b64encode(pair[0]).decode(),
+                         epk_trust_policy_sig=base64.b64encode(pair[1]).decode())
+
+        directory = self.wrappers()
+        saved = trust.FW_PRINTENV, trust.FW_SETENV
+        trust.FW_PRINTENV, trust.FW_SETENV = str(directory / "fw_printenv"), str(directory / "fw_setenv")
+        self.addCleanup(lambda: (setattr(trust, "FW_PRINTENV", saved[0]), setattr(trust, "FW_SETENV", saved[1])))
+
+        def current():
+            return trust.current_state(platform, root_pem=custodian.root_pem)
+
+        self.put(record(seeded(p1, 1), 1), record(seeded(p1, 1), 2))
+        after = trust.admit_policy(*p2, platform, current(), root_pem=custodian.root_pem)
+        self.assertEqual((after["trust_epoch"], after["floor"]), (2, 12))
+        for raw in self.copies():
+            values = decode(raw)
+            self.assertEqual(values[b"epk_state_generation"], b"8")
+            self.assertEqual(values[b"epk_trust_epoch"], b"2")
+            self.assertEqual(base64.b64decode(values[b"epk_trust_policy"]), p2[0])
+        with self.assertRaises(trust.TrustError):
+            trust.admit_policy(*p1, platform, current(), root_pem=custodian.root_pem)
+
+        # Cut after the first copy: newest state is selected but not acknowledged.
+        self.put(record(seeded(p1, 1), 2), record(seeded(p1, 1), 1))
+        before = current()
+        # Only the writer runs under the fault library, not OpenSSL.
+        self.wrappers(fault="EPK_TEST_TORN_WRITE=2 LD_PRELOAD=" + shlex.quote(str(FAULT_LIBRARY)) + " ")
+        with self.assertRaises(trust.TrustError):
+            trust.admit_policy(*p2, platform, before, root_pem=custodian.root_pem)
+        self.wrappers()
+        self.assertEqual(current()["trust_epoch"], 2)
+        epochs = []
+        for raw in self.copies():
+            try:
+                epochs.append(decode(raw)[b"epk_trust_epoch"])
+            except ValueError:
+                epochs.append(None)
+        self.assertNotEqual(epochs, [b"2", b"2"], "the cut left one copy behind")
+        trust.admit_policy(*p2, platform, current(), root_pem=custodian.root_pem)
+        for raw in self.copies():
+            values = decode(raw)
+            self.assertEqual(values[b"epk_trust_epoch"], b"2")
+            self.assertEqual(values[b"epk_state_generation"], b"8")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

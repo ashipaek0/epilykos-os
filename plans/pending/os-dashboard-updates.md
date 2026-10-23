@@ -67,7 +67,7 @@ For every implementation task: create its focused regression first, run it and o
 | 1. Track A bootstrap and env state | M | Design approval; baseline sync done | In progress: native guard/RAUC tests, host seed generation and generated-default budget, strict legacy export/preflight and manual evidence recorder; image/Pi proof, actual adoption and final runtime budget pending |
 | 2. Slot-contained Linux | M | 1 | Pending; distinct ROOT kernels, checked counters, terminal halt |
 | 3. Every-boot health and watchdog | M | 2 | Pending; normal boot refresh, kernel/app/hang reset, bounded fallback |
-| 4. Shared trust and packages | M | 1 | Pending; delegation/revocation across both slots and real RAUC fixtures |
+| 4. Shared trust and packages | M | 1 | In progress: shared policy/entry/bundle verification, generated keyring, verity bundles and real RAUC 1.15.2 / guarded fw-tools tests ([evidence](../../evidence/os-updates/signed-packages.md)); production keys and on-box install pending |
 | 5. Host staging and admission | M | 4 | Pending; byte/hash/space/ownership proofs |
 | 6. RAUC transaction and durable guard | M | 2–5 | Pending; worker-kill/RAUC-live concurrency tests |
 | 7. Activation, reconciliation and app safety | M | 3, 6 | Pending; success/failure/OS-app matrix and crash cuts |
@@ -127,6 +127,11 @@ Keep Task 3 unchecked until the spare-card hang/deadline/fallback cases pass.
 - [ ] Commit with measured handoff coverage and remaining physical limitations recorded.
 
 ### Task 4: Native bundles and shared delegated authorization
+
+In progress: implemented with host, real RAUC and native env coverage; see
+[evidence](../../evidence/os-updates/signed-packages.md) and the custodian
+procedure in `keys/os-release/README.md`. Generating production keys stays
+the maintainer's step.
 
 **Files:** modify RAUC `system.conf`, defconfig/kernel requirements and board hooks; create `tools/{build_os_bundle.py,test_os_bundle.py,verify_os_release.py,test_verify_os_release.py,test_os_trust_policy.py}`, release/policy schemas, `keys/os-release/README.md`, test-only CA/delegation fixtures and pinned offline index-root public key provisioning. Reuse Task 1 env state adapter. Production secrets stay outside the repo.
 

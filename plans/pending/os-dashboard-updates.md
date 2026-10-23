@@ -49,13 +49,21 @@ It still gates any claim of full independent/early boot recovery.
 
 ## Tracking and verification conventions
 
-All tasks below are **pending**. Proposed test modules/commands do not exist yet and are not evidence of passing behavior. Existing checks: OS `make test contracts`, `git diff --check`; app `npm test` with its CI-supported Node version (inspect current package/workflow before installing). Use the existing OS virtual environment or CI dependencies when running Python tests; system Python previously lacked dbus-fast.
+All tasks below remain **incomplete**. Task 1's first implementation slice
+adds the portable native-env core and `tools/test_platform_env.py`; its
+[delivery status](../decisions/pi3-update-bootstrap.md) distinguishes tested
+primitives from pending target integration. Other proposed test modules/commands
+are not evidence of passing behavior. Existing checks: OS `make test contracts`,
+`git diff --check`; app `npm test` with its CI-supported Node version (inspect
+current package/workflow before installing). Use the existing OS virtual
+environment or CI dependencies when running Python tests; system Python
+previously lacked dbus-fast.
 
 For every implementation task: create its focused regression first, run it and observe the intended failure, implement the smallest slice, run the focused test and required affected-suite checks, then commit explicit paths as ashipaek0 with no AI attribution. Do not write tests that only duplicate a configuration string; include actual generated-artifact or process behavior where that is the failure mode.
 
 | Task | Size | Dependencies | Status / exit evidence |
 |---|---|---|---|
-| 1. Track A bootstrap and env state | M | Design approval; baseline sync done | Pending; protocol-2 ABI, measured env budget, adoption tests |
+| 1. Track A bootstrap and env state | M | Design approval; baseline sync done | In progress: native core/fault tests; native integration, final target budget, bootstrap/adoption and hardware runner pending |
 | 2. Slot-contained Linux | M | 1 | Pending; distinct ROOT kernels, checked counters, terminal halt |
 | 3. Every-boot health and watchdog | M | 2 | Pending; normal boot refresh, kernel/app/hang reset, bounded fallback |
 | 4. Shared trust and packages | M | 1 | Pending; delegation/revocation across both slots and real RAUC fixtures |

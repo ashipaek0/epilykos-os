@@ -189,25 +189,13 @@ class BundleTests(unittest.TestCase):
         valid; a bundle signed with an already expired leaf is refused."""
         if not shutil.which('faketime'):
             self.skipTest('faketime is not installed')
-        then = ['faketime', '2021-06-01 12:00:00']
-        key, csr, pem = self.dir / 'old.key', self.dir / 'old.csr', self.dir / 'old.pem'
-        ext = self.dir / 'old.ext'
-        ext.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n')
-        # The whole chain must be valid at the signing time: a CA made today is not.
-        ca_key, ca_pem = self.dir / 'old-ca.key', self.dir / 'old-ca.pem'
-        subprocess.run(['faketime', '2021-01-01 00:00:00', 'openssl', 'req', '-new', '-x509', '-newkey', 'ec',
-                        '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', ca_key, '-out', ca_pem,
-                        '-days', '9131', '-subj', '/CN=TEST-ONLY old CA',
-                        '-addext', 'basicConstraints=critical,CA:TRUE',
-                        '-addext', 'keyUsage=critical,keyCertSign,cRLSign'], check=True, capture_output=True)
+        then = ['faketime', '2021-06-15 12:00:00']
+        # Certificates get explicit past dates (openssl ca), not faked clocks;
+        # the whole chain must be valid at the signing time.
+        ca_key, ca_pem = self.dated_cert('old-ca', '20210101000000Z', '20460101000000Z', ca=True)
+        key, pem = self.dated_cert('old-leaf', '20210601000000Z', '20210701000000Z', issuer=(ca_pem, ca_key))
         conf = self.dir / 'old-ca.conf'
         conf.write_text(self.system_conf(ca_pem))
-        subprocess.run(['openssl', 'req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
-                        '-keyout', key, '-out', csr, '-subj', '/CN=TEST-ONLY old leaf'], check=True,
-                       capture_output=True)
-        subprocess.run([*then, 'openssl', 'x509', '-req', '-in', csr, '-CA', ca_pem, '-CAkey', ca_key,
-                        '-CAserial', self.dir / 'old.srl', '-CAcreateserial', '-out', pem, '-days', '30',
-                        '-extfile', ext], check=True, capture_output=True)
         content = self.dir / 'old.content'
         content.mkdir()
         shutil.copyfile(self.rootfs, content / 'rootfs.ext4')
@@ -216,6 +204,10 @@ class BundleTests(unittest.TestCase):
         subprocess.run([*then, RAUC, 'bundle', '--cert', pem, '--key', key, content, signed_then], check=True,
                        capture_output=True)
         subprocess.run([RAUC, 'bundle', '--cert', pem, '--key', key, content, signed_now], capture_output=True)
+        cms = subprocess.run(['openssl', 'cms', '-cmsout', '-print', '-inform', 'DER', '-in', '/dev/stdin'],
+                             input=trust.bundle_signature(signed_then), capture_output=True).stdout
+        if b'2021' not in cms.split(b'signingTime', 1)[-1][:200]:
+            self.skipTest('faketime does not change the signing time on this host')
         def info(bundle, config=conf):
             return subprocess.run([RAUC, '--conf', str(config), 'info', str(bundle)], capture_output=True, text=True)
         result = info(signed_then)
@@ -225,6 +217,29 @@ class BundleTests(unittest.TestCase):
         strict.write_text(conf.read_text().replace('use-bundle-signing-time=true', ''))
         result = subprocess.run([RAUC, '--conf', str(strict), 'info', str(signed_then)], capture_output=True)
         self.assertNotEqual(result.returncode, 0, 'without the option the same bundle is refused today')
+
+    def dated_cert(self, name, start, end, ca=False, issuer=None):
+        """An EC P-256 certificate with exactly this validity window."""
+        work = self.dir / f'{name}.db'
+        work.mkdir()
+        (work / 'index.txt').touch()
+        (work / 'serial').write_text('1000\n')
+        key, csr, pem = self.dir / f'{name}.key', self.dir / f'{name}.csr', self.dir / f'{name}.pem'
+        subprocess.run(['openssl', 'req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
+                        '-keyout', key, '-out', csr, '-subj', f'/CN=TEST-ONLY {name}'], check=True,
+                       capture_output=True)
+        extensions = ('basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n' if ca else
+                      'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n')
+        config = work / 'ca.cnf'
+        config.write_text(f'[ca]\ndefault_ca=d\n[d]\ndatabase={work}/index.txt\nserial={work}/serial\n'
+                          f'new_certs_dir={work}\ndefault_md=sha256\npolicy=p\nunique_subject=no\n'
+                          f'[p]\ncommonName=supplied\n[x]\n{extensions}')
+        signer = ['-selfsign', '-keyfile', key] if issuer is None else ['-cert', issuer[0], '-keyfile', issuer[1]]
+        result = subprocess.run(['openssl', 'ca', '-batch', '-notext', '-config', config, '-extensions', 'x',
+                                 '-in', csr, '-out', pem, '-startdate', start, '-enddate', end, *signer],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return key, pem
 
     # -- manifest agreement ---------------------------------------------------
     def test_manifest_must_agree_with_its_entry(self):

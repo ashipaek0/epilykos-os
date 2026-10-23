@@ -124,3 +124,10 @@ CONFIG_CRYPTO_ZSTD=y
 # CONFIG_ARCH_VISCONTI is not set
 # CONFIG_ARCH_XGENE is not set
 # CONFIG_ARCH_ZYNQMP is not set
+
+# -- Watchdog handoff (protocol 2, C-BOOT-003): a watchdog U-Boot left
+# running is fed by the kernel only until userspace opens it, for at most
+# this long; a boot that never reaches PID1 (say, waiting for its root
+# device) is then reset. No effect when no watchdog is running at boot
+# (protocol-1 cards).
+CONFIG_WATCHDOG_OPEN_TIMEOUT=120

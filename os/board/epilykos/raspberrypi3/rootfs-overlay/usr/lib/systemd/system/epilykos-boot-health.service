@@ -1,0 +1,24 @@
+[Unit]
+Description=EpilykosOS: every-boot health, 1200 s deadline from userspace start (C-BOOT-003)
+Documentation=https://github.com/ashipaek0/epilykos-os/blob/dev/plans/decisions/os-dashboard-updates-design.md
+# Protocol-2 cards only (protocol2-overlay's preset enables it there and
+# turns epilykos-mark-good off). It starts early and independently of DATA
+# and the app: its deadline counts from userspace start, and a DATA that
+# never mounts must still end in a reboot rather than a stuck boot.
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/epilykos-boot-health
+# Its loop is the only heartbeat (at most every 2 s): a stuck supervisor is
+# killed and, with Restart=, resumes against the same deadline.
+WatchdogSec=15s
+Restart=on-watchdog
+TimeoutStartSec=60s
+
+[Install]
+WantedBy=sysinit.target

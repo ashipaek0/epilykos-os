@@ -90,7 +90,8 @@ class CardImageTests(unittest.TestCase):
         env = {**os.environ, 'BR2_CONFIG': str(config), 'TARGET_DIR': str(target), 'BINARIES_DIR': str(binaries),
                'EPILYKOS_OS_SEQUENCE': '19', 'EPILYKOS_SOURCE_COMMIT': 'b' * 40,
                'EPILYKOS_TRUST_DIR': str(cls.trust), **env_overrides}
-        block = ('set -e\nCHANNEL=dev\nOS_VERSION=0.7-dev.1\nRELEASE=3.0-dev.1\nREPO_DIR=' + str(ROOT) + '\n'
+        block = ('set -e\nCHANNEL=dev\nOS_VERSION=0.7-dev.1\nRELEASE=3.0-dev.1\nREPO_DIR=' + str(ROOT) +
+                 '\nBOARD_DIR=' + str(BOARD) + '\n'
                  + protocol2_block(BOARD / 'post-build.sh'))
         run('sh', '-c', block, env=env)
         # Buildroot packs the staged target into rootfs.ext4 between the hooks.
@@ -121,6 +122,9 @@ class CardImageTests(unittest.TestCase):
         self.assertEqual(result['trust_epoch'], 1)
         self.assertGreaterEqual(result['env_free_bytes'], 2048)
         platform = json.loads((self.card / 'protocol2-seed/platform.json').read_text())
+        target = self.card.parent / 'target'
+        self.assertTrue((target / 'usr/lib/systemd/system-preset/40-epilykos-protocol2.preset').is_file())
+        self.assertTrue((target / 'usr/lib/systemd/system.conf.d/50-epilykos-watchdog.conf').is_file())
         self.assertEqual((platform['boot_protocol'], platform['host_api'], platform['source']), (2, 2, 'b' * 40))
         # post-image.sh ran the same check itself (CLI path).
         cli = subprocess.run([sys.executable, ROOT / 'tools/check_card_image.py', '--image', self.card / 'sdcard.img',
@@ -248,6 +252,7 @@ class CardImageTests(unittest.TestCase):
         image = binaries / 'sdcard.img'
         self.assertFalse((binaries / 'protocol2-seed').exists())
         self.assertFalse((base / 'target/usr/lib/epilykos/platform.json').exists())
+        self.assertFalse((base / 'target/usr/lib/systemd/system-preset/40-epilykos-protocol2.preset').exists())
         self.assertEqual(check_card_image.read_at(image, 0x400000, 32768), b'\0' * 32768)
         run('mdir', '-i', self.boot_offset(image), '::Image')
         with self.assertRaises(ValueError):

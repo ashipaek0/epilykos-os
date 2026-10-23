@@ -19,7 +19,10 @@ bootchooser commands against temporary files, with injected I/O failures.
 
 **Not yet active in shipping images:** the paired Buildroot switch
 `BR2_EPILYKOS_NATIVE_ENV_GUARD` defaults off, preserving current protocol-1
-behavior. Task 1 is incomplete. Do not set `boot_protocol=2`, enable
+behavior. The patches are applied to every build (BR2_GLOBAL_PATCH_DIR), so
+every change in them, including fw_setenv's stricter batch and write-error
+handling, sits behind the guard; with it off, U-Boot and fw-tools behave as
+upstream. Task 1 is incomplete. Do not set `boot_protocol=2`, enable
 installation or claim the invariant is enforced on a device until seeded
 state, the checked boot script and the other requirements below are delivered.
 Buildroot checks paired loader/fw-tools enablement after configuration and

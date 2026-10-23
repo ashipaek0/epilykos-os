@@ -116,30 +116,32 @@ Upstream: not applicable (Epilykos platform ABI)
  	int len;
  	char *env, *nxt;
  	char *oldval = NULL;
-@@ -715,11 +781,12 @@
+@@ -715,11 +781,20 @@
  		value[len++] = '\0';
  	}
  
--	fw_env_write(name, value);
++#ifdef EPILYKOS_ENV_GUARD
 +	ret = fw_env_write(name, value);
++
++	free(value);
++
++	if (!ret)
++		ret = fw_env_flush(opts);
++#else
+ 	fw_env_write(name, value);
  
  	free(value);
  
--	ret = fw_env_flush(opts);
-+	if (!ret)
-+		ret = fw_env_flush(opts);
+ 	ret = fw_env_flush(opts);
++#endif
  	fw_env_close(opts);
  
  	return ret;
-@@ -838,11 +905,13 @@
+@@ -838,11 +913,21 @@
  	}
  	free(line);
  
--	/* Close file if not stdin */
--	if (strcmp(fname, "-") != 0)
--		fclose(fp);
--
--	ret |= fw_env_flush(opts);
++#ifdef EPILYKOS_ENV_GUARD
 +	/* A failed batch must never commit its successful prefix. */
 +	if (!feof(fp) || ferror(fp))
 +		ret = -1;
@@ -147,10 +149,17 @@ Upstream: not applicable (Epilykos platform ABI)
 +		ret = -1;
 +	if (!ret)
 +		ret = fw_env_flush(opts);
++#else
+ 	/* Close file if not stdin */
+ 	if (strcmp(fname, "-") != 0)
+ 		fclose(fp);
+ 
+ 	ret |= fw_env_flush(opts);
++#endif
  
  	fw_env_close(opts);
  
-@@ -1426,6 +1495,12 @@
+@@ -1426,6 +1511,12 @@
  
  	if (parse_config(opts))	/* should fill envdevices */
  		return -EINVAL;
@@ -163,7 +172,7 @@ Upstream: not applicable (Epilykos platform ABI)
  
  	buf0 = calloc(1, CUR_ENVSIZE);
  	if (buf0 == NULL) {
-@@ -1516,6 +1591,19 @@
+@@ -1516,6 +1607,19 @@
  		    !crc0_ok || !crc1_ok)
  			environment.dirty = 1;
  
@@ -183,7 +192,7 @@ Upstream: not applicable (Epilykos platform ABI)
  		if (crc0_ok && !crc1_ok) {
  			dev_current = 0;
  		} else if (!crc0_ok && crc1_ok) {
-@@ -1562,6 +1650,7 @@
+@@ -1562,6 +1666,7 @@
  			}
  		}
  

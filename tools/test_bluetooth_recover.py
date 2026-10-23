@@ -35,8 +35,11 @@ check('+module_param(max_speed, uint, 0444);' in patch, 'patch adds the max_spee
 check(re.search(r'^\+\s+if \(max_speed && bcmdev->oper_speed > max_speed\) \{$', patch, re.M), 'patch caps oper_speed in serdev probe')
 check(patch.count('--- a/drivers/bluetooth/hci_bcm.c\n') == 1 and patch.count('+++ b/drivers/bluetooth/hci_bcm.c\n') == 1, 'patch is -p1 against hci_bcm.c')
 defconfig = (root / 'os/configs/epilykos_raspberrypi3_defconfig').read_text()
-check('BR2_LINUX_KERNEL_PATCH="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/patches/linux"' in defconfig,
-      'defconfig applies the board kernel patches')
+check('BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/patches"' in defconfig,
+      'the global patch directory applies patches/linux to the kernel')
+# Buildroot applies the global directory and BR2_LINUX_KERNEL_PATCH both; the
+# same patch twice stops the build ("duplicate filename").
+check(not re.search(r'^BR2_LINUX_KERNEL_PATCH=', defconfig, re.M), 'kernel patches are not also listed in BR2_LINUX_KERNEL_PATCH')
 fragment = (board / 'linux.fragment').read_text()
 check('CONFIG_BT_HCIUART=m' in fragment and 'CONFIG_BT_HCIUART_BCM=y' in fragment,
       'hci_bcm is built into the hci_uart module, so the option is hci_uart.max_speed')

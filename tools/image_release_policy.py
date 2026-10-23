@@ -23,6 +23,7 @@ def decide(context):
     event = context.get('event')
     ref = context.get('ref', '')
     source = context.get('source_on_main') == 'true'
+    protocol_1 = context.get('boot_protocol', '') in ('', '1')
     authorized_event = (
         event in ('push', 'workflow_dispatch') and ref == 'refs/heads/main'
         or event == 'release' and bool(re.fullmatch(r'refs/tags/v[0-9]+\.[0-9]+', ref))
@@ -37,10 +38,15 @@ def decide(context):
         'authorized_event': authorized_event,
         'new_or_explicit_release': context.get('new_version') == 'true' or event == 'release',
         'not_a_retest': previous == '',
+        # Protocol-2 cards (OS updates) are development builds until their
+        # hardware acceptance; they carry test or unaccepted trust.
+        'protocol_1_image': protocol_1,
     }
     return {
         'publish': all(conditions.values()),
-        'diagnose': validated and (retest or artifact),
+        # The QEMU diagnostic boots the kernel from BOOT, which a protocol-2
+        # card no longer carries.
+        'diagnose': validated and (retest or artifact) and protocol_1,
         'blocking': [name for name, passed in conditions.items() if not passed],
     }
 
@@ -68,7 +74,7 @@ def main():
     if args.sha256:
         parser.error('--sha256 requires --verify-artifact')
     keys = ('validation', 'build', 'artifact', 'channel', 'event', 'ref',
-            'new_version', 'source_on_main', 'image_from_run', 'image_sha256')
+            'new_version', 'source_on_main', 'image_from_run', 'image_sha256', 'boot_protocol')
     result = decide({key: os.environ.get('POLICY_' + key.upper(), '') for key in keys})
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:

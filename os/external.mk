@@ -24,6 +24,17 @@ HOST_UBOOT_TOOLS_POST_PATCH_HOOKS += EPILYKOS_COPY_FW_ENV_GUARD
 UBOOT_TOOLS_PRE_BUILD_HOOKS += EPILYKOS_COPY_FW_ENV_GUARD
 HOST_UBOOT_TOOLS_PRE_BUILD_HOOKS += EPILYKOS_COPY_FW_ENV_GUARD
 
+ifeq ($(BR2_EPILYKOS_BOOT_PROTOCOL_2),y)
+UBOOT_KCONFIG_FRAGMENT_FILES += $(EPILYKOS_PI3_BOARD)/platform-env/protocol2-uboot.fragment
+# The seeded environment (post-image.sh, tools/os_bootstrap.py) starts from
+# this loader's own generated defaults, never a hand-kept copy.
+define EPILYKOS_UBOOT_INITIAL_ENV
+	$(TARGET_CONFIGURE_OPTS) $(UBOOT_MAKE) -C $(@D) $(UBOOT_MAKE_OPTS) u-boot-initial-env
+	$(INSTALL) -D -m 0644 $(@D)/u-boot-initial-env $(BINARIES_DIR)/u-boot-initial-env
+endef
+UBOOT_POST_BUILD_HOOKS += EPILYKOS_UBOOT_INITIAL_ENV
+endif
+
 ifeq ($(BR2_EPILYKOS_NATIVE_ENV_GUARD),y)
 UBOOT_KCONFIG_FRAGMENT_FILES += $(EPILYKOS_PI3_BOARD)/platform-env/guard.fragment
 UBOOT_TOOLS_MAKE_OPTS += EPILYKOS_ENV_GUARD=y

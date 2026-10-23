@@ -23,6 +23,7 @@ test-slot-boot:
 ## Self-test the validator against deliberately broken fixtures.
 test:
 	$(PYTHON) tools/test_slot_linux.py
+	$(PYTHON) tools/test_card_image.py
 	$(PYTHON) tools/test_platform_env.py
 	$(PYTHON) tools/test_bootstrap_adoption.py
 	$(PYTHON) tools/test_os_slot_acceptance.py

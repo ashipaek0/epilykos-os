@@ -122,3 +122,20 @@ def env_for(raw, signature, epoch, floor=11, **override):
               'epk_trust_policy_sig': base64.b64encode(signature).decode()}
     values.update(override)
     return {k: v for k, v in values.items() if v is not None}
+
+
+def signed_bundle(custodian, leaf, path, sequence=12, channel='dev', epoch=1, image=b'rootfs' * 1000):
+    """A package in RAUC's verity layout ([payload][CMS with the manifest][size])
+    made with OpenSSL, for tests that need no RAUC binary."""
+    manifest = '\n'.join([
+        '[update]', 'compatible=epilykos-raspberrypi3', 'version=0.7', '', '[bundle]', 'format=verity', '',
+        '[image.rootfs]', 'filename=rootfs.ext4', f'size={len(image)}',
+        f'sha256={hashlib.sha256(image).hexdigest()}', '', '[meta.epilykos]', 'board=raspberrypi3',
+        f'channel={channel}', f'sequence={sequence}', 'boot_protocol=2', 'min_host_api=2', f'trust_epoch={epoch}', ''])
+    path = Path(path)
+    (path.parent / 'manifest.raucm').write_text(manifest)
+    key, cert, _ = custodian.leaves[leaf]
+    cms = openssl('cms', '-sign', '-binary', '-nodetach', '-in', path.parent / 'manifest.raucm',
+                  '-signer', cert, '-inkey', key, '-outform', 'DER')
+    path.write_bytes(os.urandom(64 * 1024) + cms + len(cms).to_bytes(8, 'big'))
+    return path

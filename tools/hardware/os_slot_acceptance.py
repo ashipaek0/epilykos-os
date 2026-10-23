@@ -19,9 +19,23 @@ import stat
 import subprocess
 import sys
 
-CHECKPOINTS = {"boot-a", "boot-b", "ready-power-cut", "install-power-cut",
-               "trial-failure-rollback", "policy-copy-loss", "both-slots-exhausted", "factory-reset"}
-PAIRED = CHECKPOINTS - {"boot-a", "boot-b"}
+# Design §12 (OS updates from Settings), one checkpoint per hardware case.
+# Each is observed by hand before and after; none is ever marked passed here.
+CHECKPOINTS = {
+    # Slots, boot health and the loader
+    "boot-a", "boot-b", "healthy-reboots", "bad-dtb", "bad-kernel", "bad-app", "hung-kernel",
+    "supervisor-hang", "data-mount-failure", "both-slots-exhausted",
+    # The online update journey
+    "good-update", "download-power-cut", "install-power-cut", "ready-power-cut", "restart-power-cut",
+    "trying-power-cut", "confirm-power-cut", "trial-failure-rollback", "worker-killed-rauc-alive",
+    "pending-backup-at-restart", "discard",
+    # Trust
+    "refused-packages", "revocation-after-fallback", "policy-copy-loss", "interrupted-policy-update",
+    # App and data
+    "app-survives-update", "factory-reset", "factory-reset-trying", "db-fallback-compat",
+    # Measurements (R18)
+    "measurements", "soak-72h"}
+PAIRED = CHECKPOINTS - {"boot-a", "boot-b", "measurements"}
 LIMIT = 128 * 1024
 
 # Fixed commands only; device configuration cannot supply shell commands.
@@ -46,10 +60,20 @@ for name, argv in [
     ("data_mount", ["findmnt", "--json", "--output", "SOURCE,TARGET,FSTYPE,OPTIONS", "--mountpoint", "/data"]),
     ("rauc", ["rauc", "status"]),
     ("env", ["fw_printenv", "BOOT_ORDER", "BOOT_A_LEFT", "BOOT_B_LEFT", "epk_state_schema",
-             "epk_state_generation", "epk_os_floor", "epk_trust_epoch"]),
+             "epk_state_generation", "epk_os_floor", "epk_trust_epoch", "epk_os_pending", "epk_os_target",
+             "epk_os_from", "epk_os_target_sequence", "epk_os_phase", "epk_os_trial_started"]),
+    ("os_update", ["python3", "-c", "import json,sys; sys.path.insert(0,'/usr/lib/epilykos/python'); "
+                   "import epilykos_os_update as u; print(json.dumps(u.view(resume=False), sort_keys=True))"]),
+    ("os_guard", ["cat", "/data/epilykos/os-updater/public/guard.json"]),
+    ("os_health", ["cat", "/run/epilykos/os-health.json"]),
+    ("services", ["systemctl", "show", "rauc", "epilykos-os-update", "epilykos-boot-health",
+                  "--property=Id,ActiveState,SubState,Result,MemoryPeak,InvocationID"]),
+    ("memory", ["free", "-b"]),
+    ("data_space", ["df", "-B1", "/data"]),
     ("app", ["systemctl", "show", "epilykos", "--property=ActiveState,SubState,Result"]),
     ("journal", ["journalctl", "--no-pager", "-b", "-n", "120", "-u", "epilykos",
-                 "-u", "rauc", "-u", "epilykos-mark-good", "-u", "epilykos-boot-health"])]:
+                 "-u", "rauc", "-u", "epilykos-mark-good", "-u", "epilykos-boot-health",
+                 "-u", "epilykos-os-update", "-u", "epilykos-hostd"])]:
     try:
         # A regular temporary file bounds memory even if a misbehaving command
         # emits too much. A POSIX file-size limit also bounds disk usage.
@@ -205,6 +229,28 @@ def record(directory, checkpoint, phase, snapshot, note):
         os.close(fd)
 
 
+def report(directory):
+    """What has been observed per checkpoint. Never a pass: review decides."""
+    directory = Path(directory)
+    identity = read_json(directory / "identity.json")
+    seen = {name: set() for name in CHECKPOINTS}
+    failed = {name: 0 for name in CHECKPOINTS}
+    for path in sorted((directory / "events").glob("*.json")):
+        event = read_json(path)
+        if event.get("assessment") == "collection-failed":
+            failed[event["checkpoint"]] += 1
+        else:
+            seen[event["checkpoint"]].add(event["phase"])
+    status = {}
+    for name in sorted(CHECKPOINTS):
+        needed = {"before", "after"} if name in PAIRED else {"after"}
+        status[name] = ("observed-unreviewed" if needed <= seen[name]
+                        else "partial" if seen[name] else "collection-failed" if failed[name] else "pending")
+    return {"schema": 1, "image_sha256": identity["image_sha256"], "hardware_accepted": False,
+            "checkpoints": status,
+            "pending": sorted(name for name, value in status.items() if value != "observed-unreviewed")}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -216,8 +262,13 @@ def main():
     observe.add_argument("--checkpoint", choices=sorted(CHECKPOINTS), required=True)
     observe.add_argument("--phase", choices=["before", "after"], required=True)
     observe.add_argument("--note", required=True)
+    summary = sub.add_parser("report")
+    summary.add_argument("--run", type=Path, required=True)
     args = parser.parse_args()
     try:
+        if args.action == "report":
+            print(json.dumps(report(args.run), indent=2, sort_keys=True))
+            return
         if args.action == "init":
             initialize(args.output, read_json(args.config))
         else:

@@ -85,6 +85,34 @@ class AcceptanceTests(unittest.TestCase):
         event = json.loads(next((run / "events").glob("*.json")).read_bytes())
         self.assertEqual(event["assessment"], "collection-failed")
 
+    def test_every_design_case_is_a_checkpoint_and_report_never_passes(self):
+        for name in ["healthy-reboots", "bad-dtb", "bad-kernel", "bad-app", "hung-kernel", "supervisor-hang",
+                     "good-update", "download-power-cut", "restart-power-cut", "trying-power-cut",
+                     "worker-killed-rauc-alive", "refused-packages", "revocation-after-fallback",
+                     "app-survives-update", "factory-reset-trying", "measurements", "soak-72h"]:
+            self.assertIn(name, self.api.CHECKPOINTS)
+        run = self.root / "run"
+        self.api.initialize(run, self.config)
+        self.api.record(run, "good-update", "before", self.snapshot, "installed from Settings")
+        summary = self.api.report(run)
+        self.assertEqual(summary["checkpoints"]["good-update"], "partial")
+        after = {**self.snapshot, "boot_id": "22222222-2222-4222-8222-222222222222"}
+        self.api.record(run, "good-update", "after", after, "restarted, confirmed 0.7")
+        self.api.record(run, "boot-b", "after", {"error": "timeout"}, "no network")
+        summary = self.api.report(run)
+        self.assertEqual(summary["checkpoints"]["good-update"], "observed-unreviewed")
+        self.assertEqual(summary["checkpoints"]["boot-b"], "collection-failed")
+        self.assertFalse(summary["hardware_accepted"])
+        self.assertIn("soak-72h", summary["pending"])
+        self.assertNotIn("good-update", summary["pending"])
+
+    def test_collector_reads_the_update_job_without_changing_it(self):
+        self.assertIn("view(resume=False)", self.api.COLLECTOR)
+        for word in ("epk_os_pending", "epk_os_phase", "guard.json", "os-health.json", "MemoryPeak"):
+            self.assertIn(word, self.api.COLLECTOR)
+        for verb in ("os_install", "reboot", "mark-active", "fw_setenv", "rm "):
+            self.assertNotIn(verb, self.api.COLLECTOR)
+
     def test_transport_rejects_option_injection_and_requires_pinned_host_file(self):
         for change in [{"host": "-oProxyCommand=bad"}, {"user": "x;bad"}, {"port": True},
                        {"known_hosts_file": str(self.root / "absent")}]:

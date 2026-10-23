@@ -89,6 +89,31 @@ Back up the three roots offline, in two places. Losing the index root means ever
    - Pull requests never get these secrets, and a channel's signer is never used for the other channel.
    - Ordinary releases then need no per-image approval.
 
+## What CI publishes, and when
+
+The `os-package` job in `.github/workflows/os-build.yml` signs and publishes a package for a protocol-2 build. It runs only when every one of these holds (`tools/os_release.py decide`):
+
+- the card was built with the committed maintainer trust for its channel;
+- stable comes from `main`, and dev from a manual run on `dev`;
+- the repository variable `EPILYKOS_OS_PUBLISH` is `true`. Set it only after the spare-card acceptance has passed (design §12).
+
+For each channel, create a protected environment (**Settings → Environments**): `os-stable`, limited to `main`, and `os-dev`, limited to `dev`. It holds:
+
+| Name | Kind | Value |
+|---|---|---|
+| `OS_INDEX_KEY` | secret | the delegated Ed25519 index private key (PEM) |
+| `OS_RAUC_KEY` | secret | the RAUC signing leaf private key (PEM) |
+| `OS_INDEX_KEY_ID` | variable | its `key_id` in the policy, e.g. `stable-index-1` |
+| `OS_RAUC_CERT` | variable | the leaf certificate (PEM) |
+
+The job then:
+
+1. makes the package from the build's own rootfs;
+2. uploads it to the immutable release `os-<channel>-<sequence>` and reads it back unchanged;
+3. moves the `os-<channel>` pointer last: `os-index-<channel>.json`/`.sig` plus the current `os-policy.json`/`.sig`, read back unchanged.
+
+A sequence is never reused. `os_sequence: auto` takes one above the published pointer.
+
 ## Revoking a key or a leaf
 
 Write a new policy for the channel:

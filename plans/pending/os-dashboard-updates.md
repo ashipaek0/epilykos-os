@@ -71,10 +71,10 @@ For every implementation task: create its focused regression first, run it and o
 | 5. Host staging and admission | M | 4 | In progress: admission, owned resumable staging and space checks with host tests ([evidence](../../evidence/os-updates/installer.md)); hardware measurements pending |
 | 6. RAUC transaction and durable guard | M | 2–5 | In progress: worker, journal, RAUC transaction identity, independent slot check, guard and hostd refusals ([evidence](../../evidence/os-updates/installer.md)); app guard-v1 and spare-card kill/power cases pending |
 | 7. Activation, reconciliation and app safety | M | 3, 6 | In progress: intent-first Restart, Discard, trial confirmation, rollback/interrupted-activation reconciliation, factory reset mid-trial and app promotion with host tests ([evidence](../../evidence/os-updates/activation.md)); Pi OS×app matrix and migrated-database fallback tests pending |
-| 8. Settings end-to-end online update | M | 5–7, paired app capability | Pending; authenticated UI → real host job → reboot result |
+| 8. Settings end-to-end online update | M | 5–7, paired app capability | In progress: host os_* actions and the app's EpilykosOS card, routes and guard-v1 (ashipaek0/Epilykos#215) with request/DOM tests; Pi rehearsal pending |
 | 9. Authenticated offline imports | M | 4–8 | Pending; network-blocked upload/USB installation |
 | 10. Track B recovery and boot-chain updater | M per sub-PR | Its own feasibility ADR; reuse Track A interfaces | Pending separately; does not gate A1/A2 |
-| 11. Track A publication and acceptance | M per sub-PR | 1–8 for online; add 9 for offline | Pending; signed release, manual Pi failure/power-cut matrix and soak |
+| 11. Track A publication and acceptance | M per sub-PR | 1–8 for online; add 9 for offline | In progress: gated protected publication (package release, then pointer) and the full §12 acceptance recorder ([runbook](../../evidence/os-updates/release-and-acceptance.md)); production keys, spare-card matrix and soak pending |
 
 These are review boundaries, not permission to put all files of a subsystem in one oversized PR. Split a task if its diff exceeds a focused review; preserve the interfaces below. Checkpoint after Tasks 1–3, 4–7 and 8–11.
 

@@ -154,7 +154,7 @@ def main():
                                   capture_output=True, text=True)
         if mismatch.returncode == 0:
             raise ValueError("Buildroot accepted guarded loader with unguarded fw-tools")
-        run([*make, "-j2", "KCFLAGS=-fstack-usage", "env/common.o", "env/mmc.o", "env/epk_env.o"])
+        run([*make, "-j2", "KCFLAGS=-fstack-usage", "env/common.o", "env/mmc.o", "env/epk_env.o", "env/epk_halt.o"])
         for obj, symbol in [("common", "epk_env_select"), ("mmc", "epk_env_commit_snapshot")]:
             symbols = run([args.cross_compile + "nm", "-u", uboot / f"env/{obj}.o"],
                           capture_output=True, text=True).stdout

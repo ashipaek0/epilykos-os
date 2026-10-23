@@ -3,6 +3,9 @@
 **No physical protocol-2 acceptance has been performed. Shipping activation
 remains disabled.** Prior protocol-1 Pi tests do not prove these new paths.
 
+The subsequent [slot artifact and loader stage](slot-linux.md) executes the
+guarded loader in a file-backed sandbox. It does not replace Pi acceptance.
+
 The host tests verify root-signed bootstrap policy material, generate both
 16 KiB native records and select them through the compiled native guard. The
 pinned native integration build generates the real loader defaults and checks

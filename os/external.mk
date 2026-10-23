@@ -9,6 +9,7 @@ define EPILYKOS_COPY_UBOOT_ENV_GUARD
 	$(INSTALL) -m 0644 $(EPILYKOS_PI3_BOARD)/platform-env/epk_env.h $(@D)/include/epk_env.h
 	$(INSTALL) -m 0644 $(EPILYKOS_PI3_BOARD)/platform-env/epk_env.c $(@D)/env/epk_env.c
 	$(INSTALL) -m 0644 $(EPILYKOS_PI3_BOARD)/platform-env/epk_mmc.c $(@D)/env/epk_mmc.c
+	$(INSTALL) -m 0644 $(EPILYKOS_PI3_BOARD)/platform-env/epk_halt.c $(@D)/env/epk_halt.c
 endef
 UBOOT_POST_PATCH_HOOKS += EPILYKOS_COPY_UBOOT_ENV_GUARD
 UBOOT_PRE_BUILD_HOOKS += EPILYKOS_COPY_UBOOT_ENV_GUARD

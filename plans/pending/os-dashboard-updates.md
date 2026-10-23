@@ -92,6 +92,12 @@ These are review boundaries, not permission to put all files of a subsystem in o
 
 ### Task 2: Build and load complete Linux slots
 
+In progress: the artifact validator, read-only packed-ext4 checker and checked
+protocol-2 script have host/sandbox coverage; see
+[evidence and remaining integration](../../evidence/os-updates/slot-linux.md).
+Shipping image hooks still select protocol 1. Keep Task 2 unchecked until
+same-build provenance, seeded image integration and real Pi acceptance pass.
+
 **Files:** modify `os/board/epilykos/raspberrypi3/{post-build.sh,post-image.sh,boot.cmd,uboot.fragment,genimage.cfg}`, `os/configs/epilykos_raspberrypi3_defconfig`, `.github/workflows/os-build.yml`; add the pinned U-Boot env-import/guard change under board package patches and create `tools/test_slot_linux.py`, `tools/check_slot_linux.py`. Exercise the guard on actual native env records; a Linux-only repair cannot undo a stale loader saveenv.
 
 **Interfaces:** immutable `/usr/lib/epilykos/platform.json` includes `schema=1`, `board=raspberrypi3`, `arch=arm64`, `slot_layout=pi3-mbr-v1`, `boot_protocol=2`, channel, OS release/sequence/source hash, kernel release and host API version. Paths for slot Image/DTB are fixed in the design. Boot slot names remain A/B and existing PARTUUIDs remain unchanged.

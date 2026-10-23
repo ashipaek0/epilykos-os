@@ -52,7 +52,7 @@ class BundleTests(unittest.TestCase):
         cls.platform = fx.platform(sequence=12, os_version='0.7')
         cls.rootfs = fx.rootfs(cls.dir / 'rootfs.ext4', cls.platform)
         cls.conf = cls.dir / 'system.conf'
-        cls.conf.write_text(SYSTEM_CONF.read_text().replace(trust.KEYRING, str(cls.keyring)))
+        cls.conf.write_text(cls.system_conf(cls.keyring))
         cls.good = cls.build(cls.dir / 'good')
         cls.bundle = cls.good / 'epilykos-os-0.7-raspberrypi3.raucb'
         cls.entry_raw = (cls.good / 'epilykos-os-0.7-raspberrypi3.entry.json').read_bytes()
@@ -61,6 +61,15 @@ class BundleTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.temp.cleanup()
+
+    @classmethod
+    def system_conf(cls, keyring):
+        """The protocol-2 system.conf with this test's keyring and RAUC data
+        directory (CI does not run as root, so never /data/rauc)."""
+        data = cls.dir / 'rauc-data'
+        data.mkdir(exist_ok=True)
+        return SYSTEM_CONF.read_text().replace(trust.KEYRING, str(keyring)) \
+            .replace('data-directory=/data/rauc', f'data-directory={data}')
 
     @classmethod
     def build(cls, output, leaf='leaf-1', rootfs=None, policy=None):
@@ -192,7 +201,7 @@ class BundleTests(unittest.TestCase):
                         '-addext', 'basicConstraints=critical,CA:TRUE',
                         '-addext', 'keyUsage=critical,keyCertSign,cRLSign'], check=True, capture_output=True)
         conf = self.dir / 'old-ca.conf'
-        conf.write_text(SYSTEM_CONF.read_text().replace(trust.KEYRING, str(ca_pem)))
+        conf.write_text(self.system_conf(ca_pem))
         subprocess.run(['openssl', 'req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
                         '-keyout', key, '-out', csr, '-subj', '/CN=TEST-ONLY old leaf'], check=True,
                        capture_output=True)

@@ -1,0 +1,45 @@
+From: ashipaek0 <folabiklan@gmail.com>
+Subject: [PATCH] Bluetooth: hci_bcm: max_speed module option
+
+The Raspberry Pi 3 Model B's mainline device tree runs the onboard
+BCM43438 on the PL011 at 2000000 baud with no hardware flow control
+(bcm2837-rpi-3-b.dts muxes only GPIO 32/33 for uart0). At that speed the
+receive FIFO overruns whenever the CPU is late to the interrupt; the
+lost bytes show up as "Frame reassembly failed (-84)", HCI command
+timeouts and, in BlueZ, an operation that never completes
+(org.bluez.Error.InProgress for every later connect or scan).
+
+Add hci_uart.max_speed so the speed can be capped without changing the
+device tree, which on EpilykosOS lives on the BOOT partition that OS
+updates do not rewrite. 0 (the default) keeps the current behaviour.
+
+---
+ drivers/bluetooth/hci_bcm.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/bluetooth/hci_bcm.c b/drivers/bluetooth/hci_bcm.c
+--- a/drivers/bluetooth/hci_bcm.c
++++ b/drivers/bluetooth/hci_bcm.c
+@@ -167,6 +167,10 @@
+ module_param(irq_polarity, int, 0444);
+ MODULE_PARM_DESC(irq_polarity, "IRQ polarity 0: active-high 1: active-low");
+ 
++static unsigned int max_speed;
++module_param(max_speed, uint, 0444);
++MODULE_PARM_DESC(max_speed, "Highest UART speed for serial-attached controllers, in baud (0: no limit)");
++
+ static inline void host_set_baudrate(struct hci_uart *hu, unsigned int speed)
+ {
+ 	if (hu->serdev)
+@@ -1568,6 +1572,11 @@
+ 			bcmdev->oper_speed = data->max_speed;
+ 	}
+ 
++	if (max_speed && bcmdev->oper_speed > max_speed) {
++		dev_info(&serdev->dev, "UART speed limited to %u baud\n", max_speed);
++		bcmdev->oper_speed = max_speed;
++	}
++
+ 	return hci_uart_register_device(&bcmdev->serdev_hu, &bcm_proto);
+ }
+ 

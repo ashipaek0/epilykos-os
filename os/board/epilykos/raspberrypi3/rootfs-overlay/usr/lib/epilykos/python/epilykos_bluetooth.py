@@ -7,6 +7,7 @@ PINs live only in the pending future and are never stored or logged.
 import asyncio
 import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -24,6 +25,40 @@ BUS_TYPE = BusType.SESSION if os.environ.get('EPILYKOS_BLUEZ_BUS') == 'session' 
 
 class PairingError(ValueError):
     pass
+
+
+# Recovery (bluetooth_recover), asked for by the app when BlueZ is stuck. On
+# the Pi 3B a reply lost on the Bluetooth UART leaves bluetoothd waiting on an
+# operation that never finishes: every later connect or scan is refused with
+# org.bluez.Error.InProgress until bluetoothd restarts (which also powers the
+# adapter up again). At most once per RECOVER_INTERVAL_S, remembered in /run
+# so neither an app nor a hostd restart can turn it into a loop.
+RECOVER_FILE = os.environ.get('EPILYKOS_BLUETOOTH_RECOVER_FILE', '/run/epilykos/bluetooth-recover')
+RECOVER_INTERVAL_S = 600
+RECOVER_REASONS = {
+    'in_progress': 'every Bluetooth device is refused with "operation already in progress"',
+    'no_adapter': 'no Bluetooth adapter',
+}
+SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
+
+
+def recover(reason):
+    """Restart bluetoothd for a stuck BlueZ, unless that was done in the last
+    RECOVER_INTERVAL_S. Replies whether it restarted and, if not, when it may."""
+    if reason not in RECOVER_REASONS:
+        raise PairingError('Unknown Bluetooth recovery reason')
+    try:
+        age = time.time() - os.path.getmtime(RECOVER_FILE)
+        if 0 <= age < RECOVER_INTERVAL_S:
+            return {'ok': True, 'restarted': False, 'retry_in': int(RECOVER_INTERVAL_S - age) + 1}
+    except OSError:
+        pass  # never restarted on this boot
+    os.makedirs(os.path.dirname(RECOVER_FILE), exist_ok=True)
+    with open(RECOVER_FILE, 'w') as f:
+        f.write(f'{int(time.time())}\n')
+    print(f'epilykos-hostd: Bluetooth recovery: {RECOVER_REASONS[reason]}; restarting bluetoothd', flush=True)
+    subprocess.run([SYSTEMCTL, '--no-block', 'restart', 'bluetooth.service'], check=False, timeout=30)
+    return {'ok': True, 'restarted': True}
 
 
 async def bluez_owner(bus):

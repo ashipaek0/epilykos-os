@@ -36,14 +36,57 @@ Decided by the maintainer; the design is [os-dashboard-updates-design.md](os-das
 | ID | Decision |
 |---|---|
 | D1 | OS updates from Settings replace a whole ROOT slot (kernel, DTB, modules, rootfs, bundled app; R02A) and ship once they pass on hardware. The boot chain on BOOT is fixed at flashing and changes only by reflashing. R02B, R02C and R17C stay v1 work as a separate track (Track B) that does not gate slot updates. |
-| D2 | The maintainer generates and keeps the OS release CA, the OS development CA and the OS index key offline; CI holds only the signing keys it needs, in a protected environment. |
+| D2 | The maintainer generates and keeps the OS release CA, the OS development CA and the OS index authorization root offline. That offline index root signs a policy delegating channel-scoped CI index keys; CI holds only delegated index and RAUC leaf signing keys in protected environments. |
 | D3 | A spare SD card is available for destructive tests. There is no power-control rig or serial cable; power-cut tests are done by hand. |
+
+## Consistency resolution of 2026-10-23
+
+The maintainer requested the recommendations resolving the design review.
+D1–D3 remain the scope/custody/hardware decisions. Their implementation rules
+are recorded in the linked design and plan:
+
+- **Track A:** per-slot Linux updates, native signing plus delegated index
+  authorization, shared trust/floors in the existing redundant U-Boot env,
+  safe maintenance transactions, dashboard installation and their own real
+  Pi acceptance. Online delivery is tasks 1–8 plus task 11's online gate;
+  task 9 and its acceptance add offline delivery. No new raw recovery layout
+  or independent recovery enrollment is a Track A prerequisite.
+- **Track B:** task 10 owns the early boot-chain updater, automatic pre-U-Boot
+  fallback and independent both-slot/DATA-failure recovery (R02B, R02C, R17C
+  and the independent UI part of R04). It does not gate Track A. Until then,
+  exhausted slots stop safely with diagnostics instead of a counter-refill
+  loop; this endpoint is not advertised as independent recovery.
+- Refresh RAUC attempt counters on every locally healthy boot. Use the single
+  1200 s health deadline and demonstrated loader/kernel/systemd watchdog
+  handoff; persisted confirmation does not exempt normal boot health.
+- Persist activation intent before mark-active and confirmation intent before
+  mark-good. Retain a durable pending guard from ready through the terminal
+  result, including RAUC writes that outlive their initiating worker.
+- Native RAUC verification and a delegated signed per-package authorization
+  are mandatory online and offline. Shared offline-root-signed trust policy
+  advances monotonically outside DATA and is enforced by both slots, so a
+  rollback/factory reset cannot revive a locally revoked signer. Unknown
+  trust/floor state refuses installation. No sequence counter is claimed to
+  revoke a signing key by itself.
+- Existing env redundancy is supplemented by critical-state generation/
+  selection before loader writes, verified replication before commit
+  acknowledgement and fail-closed ambiguity handling. Losing one copy after
+  acknowledgement must not revive an older policy/floor; this is tested
+  separately from corrupting both copies. No tamper-proof hardware counter
+  or new raw storage region is implied.
+- Existing successful app updates stay independent. A new bundled app remains
+  tentative until OS confirmation; fallback app/database compatibility is
+  tested, not inferred solely from an image label. Bootstrap/adoption and a
+  deliberate factory reset have their explicitly documented state semantics.
+
+These are design requirements, not claims that the mechanism is implemented,
+that production keys have been provisioned, or that physical tests passed.
 
 ## Design and evidence still outstanding
 
-- Demonstrate the Pi 3B pre-U-Boot fallback/reset mechanism and define the protected earliest bootstrap boundary. Atomic writes alone do not establish recovery from a valid but hanging loader.
-- Select the independent recovery payload location, fit it into the agreed storage/boot design and define safe installation for existing cards. Do not silently repartition deployed cards.
-- Define recovery authorization without DATA-backed passwords/session secrets, including credential provisioning and reset.
+- Track B: demonstrate the Pi 3B pre-U-Boot fallback/reset mechanism and define the protected earliest bootstrap boundary. Atomic writes alone do not establish recovery from a valid but hanging loader.
+- Track B: select the independent recovery payload location and define safe installation for existing cards. Do not silently repartition deployed cards.
+- Track B: define recovery authorization without DATA-backed passwords/session secrets, including credential provisioning and reset.
 - Specify certificate validity, clock handling, rotation/revocation and recovery trust-anchor updates.
 - Define exact signed offline package serialization, per-operation peak storage budgets and interruption-safe database/update transactions.
 - Verify app/database migration compatibility under image rollback. OS bundle replay/version policy is separate from the locked application-sequence override decision.
@@ -51,11 +94,11 @@ Decided by the maintainer; the design is [os-dashboard-updates-design.md](os-das
 
 ## Implementation dependencies
 
-1. Repair the current image-build failure and produce a viable baseline image.
-2. Resolve boot-chain/recovery feasibility and storage before committing to the final update layout.
-3. Update machine-readable contracts and their generated narrative to reflect the approved policies, keeping implementation/evidence statuses honest.
-4. Implement the host/application changes with reliable automated failure tests and release publication gates.
-5. Complete the initial hardware acceptance suite and enable normal automatic stable publication under R15.
+1. Preserve the viable current baseline and the main-to-dev synchronization already completed; the original build failure below is historical.
+2. Track A: finalize protocol-2 bootstrap, existing-env state/trust budgets and slot watchdog behavior; then implement the slot/package/host/app path with its own acceptance and release gates.
+3. Track B: separately resolve early selector and independent recovery feasibility/storage before implementing that updater. Its unresolved hardware design does not block Track A.
+4. Update machine-readable contracts and generated documentation with the owning implementation PRs, preserving truthful pending evidence and Track A/B scope.
+5. Complete each track's initial hardware acceptance and automatic publication gates under R15; do not claim full v1 recovery while Track B is pending.
 
 ## Decision-review baseline and original failure
 

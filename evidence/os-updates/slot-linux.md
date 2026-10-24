@@ -1,9 +1,10 @@
 # Complete Linux slots: artifact and loader evidence
 
 This is a Task 2 implementation stage, not physical acceptance or an enabled
-OS updater. The default image still uses the protocol-1 boot script. Neither
-the new slot script nor the artifact tools are selected by post-build or
-post-image yet. `BR2_EPILYKOS_NATIVE_ENV_GUARD` remains disabled by default.
+OS updater. The default image still uses the protocol-1 boot script and
+`BR2_EPILYKOS_NATIVE_ENV_GUARD` remains disabled by default. A separate
+development build profile now wires everything below into the image (see
+"Image integration").
 
 ## Implemented boundary
 
@@ -98,13 +99,50 @@ The native integration checker separately compiles the real ARM64
 import/save/core and boot-guard/halt objects. Host filesystem checks and
 sandbox execution do not establish SD-card durability or Pi bootability.
 
+## Image integration
+
+`EPILYKOS_BOOT_PROTOCOL=2 os/build.sh raspberrypi3` (os-build.yml input
+`boot_protocol: 2`) appends `board/.../protocol2.config` to the defconfig:
+`BR2_EPILYKOS_BOOT_PROTOCOL_2` (selecting the native guard), the ext4
+features U-Boot is proven to read, `boot-slot.cmd` as boot.scr and U-Boot
+`CMD_EXT4/FS_EXT4`. It also needs `EPILYKOS_OS_SEQUENCE` (the seeded floor)
+and `EPILYKOS_TRUST_DIR` (os-policy.json/.sig and os-index-root.pem; the
+maintainer's, or `tools/os_test_trust.py` TEST-ONLY material).
+
+- post-build stages this build's own Image and DTB (Buildroot's output
+  directory) with the target's single module release and writes
+  platform.json through `tools/slot_linux.py`. Same-build provenance is by
+  construction: one Buildroot run's kernel output and target tree.
+- A U-Boot post-build hook exports this loader's generated
+  `u-boot-initial-env`; post-image seeds both environment copies from it
+  with `tools/os_bootstrap.py` (policy verified against the root first).
+- `genimage-protocol2.cfg` places env-a/env-b at 4 MiB and 4 MiB + 16 KiB,
+  drops the shared Linux Image from BOOT and pins os-index-root.pem there.
+  The DTB stays on BOOT exactly as on protocol-1 cards (config.txt does not
+  name it, so the firmware does not load it); boot.scr never loads it.
+- `tools/check_card_image.py` then checks the card: MBR layout and disk
+  signature; both copies seeded, identical, CRC-valid, flags 1/2, floor =
+  OS sequence, no transaction state, at least 2 KiB free and the policy
+  verified against BOOT's root; boot.scr's payload is exactly
+  boot-slot.cmd; no Image on BOOT; both ROOT partitions byte-identical to
+  their rootfs files and passing `check_slot_linux`.
+- Protocol-2 images are never published or QEMU-booted
+  (`tools/image_release_policy.py`); with test trust, the TEST-ONLY keys
+  are uploaded beside the card for signing test packages.
+
+`tools/test_card_image.py` runs the real post-build block, post-image.sh
+and genimage on fixtures, checks the card, has the compiled C guard select
+its environment, and refuses tampered environment, a foreign trust root,
+a shared Image on BOOT, the protocol-1 script, a changed slot and a wrong
+disk signature. A protocol-1 build is unchanged (blank environment, Image
+on BOOT).
+
 ## Still required before Task 2 acceptance
 
-Wire same-build kernel/DTB/module provenance, platform metadata, authenticated
-seed records and selected boot script into post-build/post-image. Check
-both generated ROOT images and final card layout; repeat the generated
-default/runtime environment budget. Complete the full Pi loader/image
-build and real A/B boots, including failed candidate and rollback tests.
+Run the full protocol-2 image build and record its card check. Then boot
+it on the spare card: A and B with different kernels, failed candidate and
+rollback tests, the generated default/runtime environment budget on the
+real loader. Fixture-sized cards do not prove the real image fits or boots.
 Task 3 must establish early watchdog reset, health supervision and confirmed
 slot counter handling. No release gate may treat the checks above as
 physical acceptance, and no protocol-2 shipping activation is enabled here.

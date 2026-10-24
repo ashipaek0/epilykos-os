@@ -47,6 +47,16 @@ class ReleaseGates(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertFalse(self.run_policy(**values)['publish'])
 
+    def test_protocol2_cards_are_never_published_or_qemu_booted(self):
+        for overrides in ({}, {'event': 'release', 'ref': 'refs/tags/v1.2'}):
+            with self.subTest(overrides=overrides):
+                result = self.run_policy(boot_protocol='2', **overrides)
+                self.assertFalse(result['publish'])
+                self.assertFalse(result['diagnose'])
+                self.assertIn('protocol_1_image', result['blocking'])
+        self.assertTrue(self.run_policy(boot_protocol='1')['publish'])
+        self.assertTrue(self.run_policy(boot_protocol='')['publish'], 'older workflow runs stay protocol 1')
+
     def test_no_image_means_no_boot_attempt(self):
         for build in ('failure', 'cancelled', 'skipped'):
             self.assertFalse(self.run_policy(build=build, artifact='')['diagnose'])

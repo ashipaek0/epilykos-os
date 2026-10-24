@@ -33,6 +33,16 @@ on:
         description: 'Skip the build and boot-test the image from this earlier run id'
         required: false
         default: ''
+      boot_protocol:
+        description: 'Card protocol: 1 (shipping) or 2 (OS updates; development, never published)'
+        required: false
+        default: '1'
+        type: choice
+        options: ['1', '2']
+      os_sequence:
+        description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor)'
+        required: false
+        default: ''
   # A release you create on GitHub (Releases -> Draft a new release, tag
   # v1.0 on main) builds that version; later builds of main count on from it.
   release:
@@ -58,6 +68,8 @@ env:
   # run on dev or a feature branch) preloads the dev manifest unless the
   # run asks for stable.
   EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
+  # Protocol 2 (OS updates) only when asked for by hand; see os/build.sh.
+  EPILYKOS_BOOT_PROTOCOL: ${{ github.event.inputs.boot_protocol || '1' }}
 
 jobs:
   validate:
@@ -71,6 +83,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Protocol-2 card checks build real cards (tools/test_card_image.py).
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends genimage mtools dosfstools u-boot-tools e2fsprogs
       - run: pip install pyyaml==6.0.2 dbus-fast==4.0.4
       - name: Required host and contract regressions
         run: |
@@ -161,6 +175,30 @@ jobs:
             os-ccache-${{ runner.os }}-${{ env.BOARD }}-
             os-ccache-${{ runner.os }}-
 
+      # Protocol 2 needs the OS sequence and the trust material the card is
+      # seeded with. Without the maintainer's committed public trust
+      # (keys/os-release/<channel>/) the card gets throwaway TEST-ONLY trust
+      # (tools/os_test_trust.py), uploaded beside it for signing test
+      # packages. Protocol-2 images are never published (image_release_policy).
+      - name: Protocol-2 inputs
+        if: env.EPILYKOS_BOOT_PROTOCOL == '2'
+        env:
+          OS_SEQUENCE: ${{ github.event.inputs.os_sequence }}
+        run: |
+          case "$OS_SEQUENCE" in
+            ''|0*|*[!0-9]*) echo "::error::boot_protocol 2 needs os_sequence (a positive integer)"; exit 1 ;;
+          esac
+          echo "EPILYKOS_OS_SEQUENCE=$OS_SEQUENCE" >> "$GITHUB_ENV"
+          echo "EPILYKOS_SOURCE_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
+          if [ -f "keys/os-release/$EPILYKOS_CHANNEL/os-policy.json" ]; then
+            echo "EPILYKOS_TRUST_DIR=$PWD/keys/os-release/$EPILYKOS_CHANNEL" >> "$GITHUB_ENV"
+            echo "TRUST_LABEL=maintainer-trust" >> "$GITHUB_ENV"
+          else
+            python3 tools/os_test_trust.py --output "$RUNNER_TEMP/os-test-trust" --channel "$EPILYKOS_CHANNEL"
+            echo "EPILYKOS_TRUST_DIR=$RUNNER_TEMP/os-test-trust" >> "$GITHUB_ENV"
+            echo "TRUST_LABEL=test-trust" >> "$GITHUB_ENV"
+          fi
+
       - name: Build
         id: build
         run: os/build.sh "${BOARD}"
@@ -200,16 +238,29 @@ jobs:
           e2label "$IMAGES_DIR/rootfs-b.ext4" | grep -qx ROOT-B || { echo "rootfs-b.ext4 not labelled ROOT-B"; exit 1; }
           e2label "$IMAGES_DIR/data.ext4" | grep -qx DATA || { echo "data.ext4 not labelled DATA"; exit 1; }
 
-          # The U-Boot environment area (4 MiB, two 16 KiB copies) must ship
-          # blank so U-Boot starts from its defaults, not a stale env.
-          test -z "$(dd if="$IMG" bs=16K skip=256 count=2 status=none | tr -d '\0' | head -c1)" \
-            || { echo "U-Boot environment area is not blank"; exit 1; }
-
-          # Everything the Pi firmware and U-Boot load from BOOT.
           BOOT_START=$(fdisk -o Device,Start -l "$IMG" | awk -v dev="${IMG}1" '$1==dev {print $2}')
-          for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
-            mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
-          done
+          if [ "$EPILYKOS_BOOT_PROTOCOL" = 2 ]; then
+            # Seeded environment, slot script, trust root on BOOT and each
+            # slot's own Linux (post-image.sh ran this too).
+            python3 tools/check_card_image.py --image "$IMG" \
+              --rootfs-a "$IMAGES_DIR/rootfs.ext4" --rootfs-b "$IMAGES_DIR/rootfs-b.ext4" \
+              --boot-script os/board/epilykos/raspberrypi3/boot-slot.cmd \
+              --seed "$IMAGES_DIR/protocol2-seed" | tee card-check.json
+            { echo '### Protocol-2 card check'; echo; echo '```json'; cat card-check.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr bcm2837-rpi-3-b.dtb os-index-root.pem wifi-example.txt; do
+              mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
+            done
+          else
+            # The U-Boot environment area (4 MiB, two 16 KiB copies) must ship
+            # blank so U-Boot starts from its defaults, not a stale env.
+            test -z "$(dd if="$IMG" bs=16K skip=256 count=2 status=none | tr -d '\0' | head -c1)" \
+              || { echo "U-Boot environment area is not blank"; exit 1; }
+
+            # Everything the Pi firmware and U-Boot load from BOOT.
+            for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
+              mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
+            done
+          fi
           mtype -i "${IMG}@@$((BOOT_START * 512))" ::config.txt | grep -qx 'arm_64bit=1' || { echo "config.txt is not 64-bit"; exit 1; }
 
           # 64-bit userland, and the application image actually preloaded.
@@ -297,8 +348,19 @@ jobs:
         id: image-artifact
         if: always() && steps.build.outcome == 'success'
         with:
-          name: epilykos-${{ env.BOARD }}-sdcard
+          # A protocol-2 card says so, and which trust it carries.
+          name: epilykos-${{ env.BOARD }}${{ env.EPILYKOS_BOOT_PROTOCOL == '2' && format('-protocol2-{0}', env.TRUST_LABEL) || '' }}-sdcard
           path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
+          retention-days: 14
+          if-no-files-found: error
+
+      # The TEST-ONLY keys such a card trusts, to sign test packages for it on
+      # a spare card. Never the maintainer's offline roots.
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.build.outcome == 'success' && env.TRUST_LABEL == 'test-trust'
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-test-trust
+          path: ${{ env.EPILYKOS_TRUST_DIR }}
           retention-days: 14
           if-no-files-found: error
 
@@ -334,6 +396,7 @@ jobs:
           POLICY_SOURCE_ON_MAIN: ${{ needs.validate.outputs.source_on_main }}
           POLICY_IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
           POLICY_IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+          POLICY_BOOT_PROTOCOL: ${{ env.EPILYKOS_BOOT_PROTOCOL }}
         run: |
           python3 tools/image_release_policy.py | tee pipeline-policy.json
           echo '### OS publication / diagnostic policy' >> "$GITHUB_STEP_SUMMARY"

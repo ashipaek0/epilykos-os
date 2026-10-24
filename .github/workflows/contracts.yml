@@ -11,6 +11,49 @@ permissions:
   contents: read
 
 jobs:
+  slot-boot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Sandbox build and disposable filesystem dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex m4 patch swig python3-dev python3-setuptools python3-pyelftools libssl-dev e2fsprogs
+      - name: Guarded U-Boot slot boot and failure paths
+        run: make test-slot-boot
+
+  native-env:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Native integration build dependencies
+        run: |
+          # Azure's Ubuntu mirror can exhaust the job timeout before the
+          # cross compiler downloads. Keep the signed repositories, using
+          # the main HTTPS archive for this larger dependency set.
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          sources = Path('/etc/apt/sources.list.d')
+          for path in [Path('/etc/apt/sources.list'), Path('/etc/apt/apt-mirrors.txt'),
+                       *sources.glob('*.list'), *sources.glob('*.sources')]:
+              if path.is_file():
+                  text = path.read_text()
+                  updated = text.replace('http://azure.archive.ubuntu.com', 'https://archive.ubuntu.com')
+                  updated = updated.replace('https://azure.archive.ubuntu.com', 'https://archive.ubuntu.com')
+                  if updated != text:
+                      path.write_text(updated)
+          PY
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-aarch64-linux-gnu bison flex m4 patch meson ninja-build pkg-config libglib2.0-dev libssl-dev
+      - name: Pinned fw-tools, RAUC bootchooser and ARM64 loader guard
+        run: make test-native-env
+
   contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 10

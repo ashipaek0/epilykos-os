@@ -180,13 +180,16 @@ class BootHealthTests(unittest.TestCase):
         self.assertEqual(sim.run(), 'done')
         self.assertNotIn(['rauc', 'status', 'mark-good'], sim.spawned)
 
-    def test_confirmed_ordinary_boot_is_recorded_for_os_update_admission(self):
+    def test_confirmed_boot_is_recorded_for_os_update_admission(self):
         sim = Sim(slot='B')
         sim.run()
         self.assertEqual(sim.recorded, ['B'])
-        for failed in (Sim(mark_good_code=1), Sim(env_code=1), Sim(slot='B', env=PENDING_ENV, coordinator=True)):
+        trial = Sim(slot='B', env=PENDING_ENV, coordinator=True)
+        trial.run()
+        self.assertEqual(trial.recorded, ['B'], 'a trial the coordinator confirmed is recorded too')
+        for failed in (Sim(mark_good_code=1), Sim(env_code=1), Sim(slot='B', env=PENDING_ENV, coordinator=False)):
             failed.run()
-            self.assertEqual(failed.recorded, [], 'only a confirmed ordinary boot is recorded')
+            self.assertEqual(failed.recorded, [], 'only a confirmed boot is recorded')
 
     def test_record_file(self):
         import json

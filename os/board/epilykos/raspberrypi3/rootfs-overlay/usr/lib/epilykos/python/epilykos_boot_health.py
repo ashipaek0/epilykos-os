@@ -215,9 +215,8 @@ class Supervisor:
             return 'confirming'
         if result[0] == 0:
             log('slot confirmed; attempts refreshed' if not is_trial else 'trial confirmed by the coordinator')
-            if not is_trial:
-                # OS update admission needs a confirmed, healthy running slot.
-                self.record(self.slot)
+            # OS update admission needs a confirmed, healthy running slot.
+            self.record(self.slot)
         else:
             log(f'confirmation failed ({result[0]}); attempts not refreshed')
         self.state = 'done'

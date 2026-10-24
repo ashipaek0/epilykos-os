@@ -70,7 +70,7 @@ For every implementation task: create its focused regression first, run it and o
 | 4. Shared trust and packages | M | 1 | In progress: shared policy/entry/bundle verification, generated keyring, verity bundles and real RAUC 1.15.2 / guarded fw-tools tests ([evidence](../../evidence/os-updates/signed-packages.md)); production keys and on-box install pending |
 | 5. Host staging and admission | M | 4 | In progress: admission, owned resumable staging and space checks with host tests ([evidence](../../evidence/os-updates/installer.md)); hardware measurements pending |
 | 6. RAUC transaction and durable guard | M | 2–5 | In progress: worker, journal, RAUC transaction identity, independent slot check, guard and hostd refusals ([evidence](../../evidence/os-updates/installer.md)); app guard-v1 and spare-card kill/power cases pending |
-| 7. Activation, reconciliation and app safety | M | 3, 6 | Pending; success/failure/OS-app matrix and crash cuts |
+| 7. Activation, reconciliation and app safety | M | 3, 6 | In progress: intent-first Restart, Discard, trial confirmation, rollback/interrupted-activation reconciliation, factory reset mid-trial and app promotion with host tests ([evidence](../../evidence/os-updates/activation.md)); Pi OS×app matrix and migrated-database fallback tests pending |
 | 8. Settings end-to-end online update | M | 5–7, paired app capability | Pending; authenticated UI → real host job → reboot result |
 | 9. Authenticated offline imports | M | 4–8 | Pending; network-blocked upload/USB installation |
 | 10. Track B recovery and boot-chain updater | M per sub-PR | Its own feasibility ADR; reuse Track A interfaces | Pending separately; does not gate A1/A2 |

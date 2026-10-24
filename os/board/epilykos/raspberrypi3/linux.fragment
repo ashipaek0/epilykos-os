@@ -131,3 +131,13 @@ CONFIG_CRYPTO_ZSTD=y
 # device) is then reset. No effect when no watchdog is running at boot
 # (protocol-1 cards).
 CONFIG_WATCHDOG_OPEN_TIMEOUT=120
+
+# -- OS update packages (protocol 2, design §6.1): RAUC mounts a verity
+# bundle's squashfs payload through dm-verity, so every block it installs
+# is checked against the signed root hash as it is read. Built in: RAUC
+# does not load modules. Loop and squashfs are already in the defconfig.
+CONFIG_MD=y
+CONFIG_BLK_DEV_DM=y
+CONFIG_DM_VERITY=y
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_SQUASHFS=y

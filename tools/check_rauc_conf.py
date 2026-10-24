@@ -56,7 +56,8 @@ def check(path):
 
 
 def main():
-    files = sorted(ROOT.glob('os/board/*/*/rootfs-overlay/etc/rauc/system.conf'))
+    files = sorted([*ROOT.glob('os/board/*/*/rootfs-overlay/etc/rauc/system.conf'),
+                    *ROOT.glob('os/board/*/*/protocol2-overlay/etc/rauc/system.conf')])
     bad = 0
     for f in files:
         for e in check(f):

@@ -11,7 +11,8 @@ contracts:
 render:
 	$(PYTHON) tools/render_contracts.py
 
-## Pinned native fw-tools/RAUC and actual Pi3 ARM64 loader guard compilation.
+## Pinned native fw-tools/RAUC (bootchooser, OS packages) and actual Pi3 ARM64
+## loader guard compilation.
 ## Downloads sources; needs the build dependencies listed in the checker.
 test-native-env:
 	$(PYTHON) tools/check_native_platform_env.py
@@ -25,6 +26,8 @@ test:
 	$(PYTHON) tools/test_slot_linux.py
 	$(PYTHON) tools/test_card_image.py
 	$(PYTHON) tools/test_boot_health.py
+	$(PYTHON) tools/test_os_trust_policy.py
+	$(PYTHON) tools/test_verify_os_release.py
 	$(PYTHON) tools/test_platform_env.py
 	$(PYTHON) tools/test_bootstrap_adoption.py
 	$(PYTHON) tools/test_os_slot_acceptance.py

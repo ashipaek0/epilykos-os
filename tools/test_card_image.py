@@ -125,6 +125,9 @@ class CardImageTests(unittest.TestCase):
         target = self.card.parent / 'target'
         self.assertTrue((target / 'usr/lib/systemd/system-preset/40-epilykos-protocol2.preset').is_file())
         self.assertTrue((target / 'usr/lib/systemd/system.conf.d/50-epilykos-watchdog.conf').is_file())
+        self.assertIn('path=/run/rauc/epilykos-keyring.pem', (target / 'etc/rauc/system.conf').read_text())
+        self.assertTrue(os.access(target / 'usr/bin/epilykos-os-keyring', os.X_OK))
+        self.assertTrue((target / 'usr/lib/systemd/system/rauc.service.d/20-epilykos-keyring.conf').is_file())
         self.assertEqual((platform['boot_protocol'], platform['host_api'], platform['source']), (2, 2, 'b' * 40))
         # post-image.sh ran the same check itself (CLI path).
         cli = subprocess.run([sys.executable, ROOT / 'tools/check_card_image.py', '--image', self.card / 'sdcard.img',
@@ -253,6 +256,8 @@ class CardImageTests(unittest.TestCase):
         self.assertFalse((binaries / 'protocol2-seed').exists())
         self.assertFalse((base / 'target/usr/lib/epilykos/platform.json').exists())
         self.assertFalse((base / 'target/usr/lib/systemd/system-preset/40-epilykos-protocol2.preset').exists())
+        self.assertFalse((base / 'target/usr/bin/epilykos-os-keyring').exists())
+        self.assertFalse((base / 'target/usr/lib/systemd/system/rauc.service.d/20-epilykos-keyring.conf').exists())
         self.assertEqual(check_card_image.read_at(image, 0x400000, 32768), b'\0' * 32768)
         run('mdir', '-i', self.boot_offset(image), '::Image')
         with self.assertRaises(ValueError):

@@ -126,6 +126,7 @@ def main():
         parser.error("Buildroot/native make paths must not contain whitespace")
     cache.mkdir(parents=True, exist_ok=True)
     for tool in ["cc", "make", "patch", "bison", "flex", "m4", "meson", "ninja",
+                 "mksquashfs", "mke2fs", "debugfs",
                  args.cross_compile + "gcc", args.cross_compile + "nm"]:
         if not shutil.which(tool):
             parser.error(f"missing build tool: {tool}")
@@ -165,10 +166,11 @@ def main():
         run([*make, "u-boot-initial-env"])
         run([sys.executable, ROOT / "tools/test_bootstrap_adoption.py",
              "--defaults", uboot / "u-boot-initial-env"])
-        # Minimal real RAUC CLI build: bootchooser code, no daemon/network/bundles.
+        # Minimal real RAUC CLI build: bootchooser code and bundle creation
+        # (OS packages, tools/test_os_bundle.py), no daemon/network.
         env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(work)}
         rauc_build = work / "rauc-build"
-        run(["meson", "setup", rauc_build, rauc_source, "-Dservice=false", "-Dcreate=false",
+        run(["meson", "setup", rauc_build, rauc_source, "-Dservice=false",
              "-Dnetwork=false", "-Dstreaming=false", "-Djson=disabled", "-Dgpt=disabled",
              "-Dtests=false", "-Dpkcs11_engine=false"], env=env)
         run(["meson", "compile", "-C", rauc_build], env=env)
@@ -178,6 +180,7 @@ def main():
              ROOT / "tools/native_env_faults.c", "-ldl", "-o", faults])
         run([sys.executable, ROOT / "tools/test_native_platform_env.py", "--fw-tools", binary,
              "--fault-library", faults, "--rauc", rauc_build / "rauc"])
+        run([sys.executable, ROOT / "tools/test_os_bundle.py", "--rauc", rauc_build / "rauc"])
         # The same patched sources must still support existing unseeded cards
         # when the default development switch is off.
         legacy = fw_build(fw, ["EPILYKOS_ENV_GUARD="])
@@ -186,7 +189,7 @@ def main():
         run([*make, "olddefconfig"])
         run(["make", "-f", off, uboot / ".epk-config-check"])
         run([*make, "-j2", "env/common.o", "env/mmc.o"])
-    print("PASS pinned native fw-tools/RAUC and ARM64 loader compilation (guard on/off)")
+    print("PASS pinned native fw-tools/RAUC, OS packages and ARM64 loader compilation (guard on/off)")
 
 
 if __name__ == "__main__":

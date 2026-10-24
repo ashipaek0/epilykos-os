@@ -3,7 +3,7 @@
 
 Only public material is accepted. Policy signature verification uses OpenSSL's
 Ed25519 implementation; native consumers separately enforce record durability.
-This does not enable protocol 2 or implement native RAUC signer admission.
+Policy verification is shared with the box (epilykos_os_trust).
 """
 import argparse
 import base64
@@ -15,161 +15,21 @@ from pathlib import Path
 import re
 import shutil
 import struct
-import subprocess
+import sys
 import tempfile
 import zlib
+
+sys.dont_write_bytecode = True
+# One trust implementation for the build and the box (OS update design §6).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] /
+                       "os/board/epilykos/raspberrypi3/rootfs-overlay/usr/lib/epilykos/python"))
+from epilykos_os_trust import (ED25519_SPKI, POLICY_MAX, UINT64_MAX, b64, canonical,  # noqa: E402,F401
+                               integer, openssl, strict_json, text, validate_platform, verify_policy)
 
 SIZE = 16384
 PAYLOAD = SIZE - 5
 HEADROOM = 2048
-POLICY_MAX = 6144
 RUNTIME_RESERVE = 4096
-UINT64_MAX = (1 << 64) - 1
-ED25519_SPKI = bytes.fromhex("302a300506032b6570032100")
-
-
-def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-                      allow_nan=False).encode("ascii")
-
-
-def strict_json(raw, maximum):
-    if not isinstance(raw, bytes) or not 0 < len(raw) <= maximum:
-        raise ValueError("JSON size limit")
-
-    def pairs(items):
-        result = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError("duplicate JSON key")
-            result[key] = value
-        return result
-
-    try:
-        value = json.loads(raw, object_pairs_hook=pairs)
-        if canonical(value) != raw:
-            raise ValueError("JSON must use canonical sorted ASCII encoding")
-    except (UnicodeError, TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("invalid JSON") from exc
-    return value
-
-
-def integer(value, minimum=0):
-    if type(value) is not int or not minimum <= value <= UINT64_MAX:
-        raise ValueError("invalid unsigned integer")
-    return value
-
-
-def text(value, maximum):
-    if not isinstance(value, str) or not 0 < len(value) <= maximum or not all(32 <= ord(c) <= 126 for c in value):
-        raise ValueError("invalid bounded printable string")
-    return value
-
-
-def b64(value, size):
-    try:
-        raw = base64.b64decode(value, validate=True)
-    except (ValueError, TypeError) as exc:
-        raise ValueError("invalid base64") from exc
-    if len(raw) != size or base64.b64encode(raw).decode() != value:
-        raise ValueError("invalid canonical base64 length")
-    return raw
-
-
-def openssl(*args):
-    try:
-        result = subprocess.run(["openssl", *map(str, args)], capture_output=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ValueError("OpenSSL unavailable or timed out") from exc
-    if result.returncode:
-        raise ValueError("OpenSSL rejected public material or signature")
-    return result.stdout
-
-
-def verify_policy(raw, signature, root_pubkey, *, board, channel, current=None):
-    """Verify exact root-authorized bytes and schema, optionally monotonic to current.
-
-    `root_pubkey` must come from the fixed trusted BOOT/build input, never from
-    the policy itself. `current`, when supplied, is previously verified state
-    with its exact `raw` bytes and scalar `trust_epoch` (not untrusted JSON).
-    Native CMS signer/chain, expiry and package admission belong to task 4.
-    """
-    policy = strict_json(raw, POLICY_MAX)
-    fields = {"schema", "board", "channel", "trust_epoch", "index_keys", "rauc_cas", "rauc_leaf_spki_sha256"}
-    if type(policy) is not dict or set(policy) != fields or type(policy["schema"]) is not int or policy["schema"] != 1:
-        raise ValueError("unsupported policy schema")
-    if board != "raspberrypi3" or channel not in ("dev", "stable") or policy["board"] != board or policy["channel"] != channel:
-        raise ValueError("policy board/channel mismatch")
-    integer(policy["trust_epoch"], 1)
-    if not isinstance(signature, bytes) or len(signature) != 64:
-        raise ValueError("Ed25519 signature must contain exactly 64 bytes")
-    if not isinstance(root_pubkey, bytes) or not 1 <= len(root_pubkey) <= 256 or not re.fullmatch(rb"-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/=\n]+\n-----END PUBLIC KEY-----\n", root_pubkey):
-        raise ValueError("expected pinned public PEM key")
-    with tempfile.TemporaryDirectory(prefix="epk-policy-") as directory:
-        path = Path(directory)
-        (path / "root.pem").write_bytes(root_pubkey)
-        der = openssl("pkey", "-pubin", "-in", path / "root.pem", "-outform", "DER")
-        if len(der) != 44 or not der.startswith(ED25519_SPKI):
-            raise ValueError("offline root must be Ed25519")
-        (path / "policy").write_bytes(raw)
-        (path / "signature").write_bytes(signature)
-        openssl("pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", path / "root.pem",
-                "-in", path / "policy", "-sigfile", path / "signature")
-        keys = policy["index_keys"]
-        if type(keys) is not list or not 1 <= len(keys) <= 8:
-            raise ValueError("index key count")
-        ids, public_keys = set(), set()
-        for key in keys:
-            if type(key) is not dict or set(key) != {"key_id", "public_key"}:
-                raise ValueError("index key schema")
-            if not isinstance(key["key_id"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", key["key_id"]):
-                raise ValueError("index key identifier")
-            public = b64(key["public_key"], 32)
-            if key["key_id"] in ids or public in public_keys:
-                raise ValueError("duplicate delegated key")
-            ids.add(key["key_id"])
-            public_keys.add(public)
-        cas = policy["rauc_cas"]
-        if type(cas) is not list or not 1 <= len(cas) <= 4 or any(type(c) is not str for c in cas) or len(set(cas)) != len(cas):
-            raise ValueError("RAUC CA count/duplicates")
-        for certificate in cas:
-            # One explicit CA per entry; never silently parse the first of a chain.
-            if certificate.count("-----BEGIN CERTIFICATE-----") != 1 or certificate.count("-----END CERTIFICATE-----") != 1:
-                raise ValueError("expected one CA PEM certificate")
-            if not re.fullmatch(r"-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+\n-----END CERTIFICATE-----\n", certificate):
-                raise ValueError("invalid certificate PEM")
-            (path / "ca.pem").write_text(certificate, encoding="ascii")
-            constraints = openssl("x509", "-in", path / "ca.pem", "-noout", "-ext", "basicConstraints")
-            if b"CA:TRUE" not in constraints:
-                raise ValueError("RAUC trust anchor is not a CA")
-    leaves = policy["rauc_leaf_spki_sha256"]
-    if type(leaves) is not list or not 1 <= len(leaves) <= 16 or any(type(v) is not str or not re.fullmatch("[0-9a-f]{64}", v) for v in leaves) or len(set(leaves)) != len(leaves):
-        raise ValueError("RAUC leaf SPKI allowlist")
-    if current is not None:
-        epoch = integer(current["trust_epoch"], 1)
-        if policy["trust_epoch"] < epoch or (policy["trust_epoch"] == epoch and raw != current["raw"]):
-            raise ValueError("policy rollback or same-epoch mutation")
-    return policy
-
-
-def validate_platform(platform):
-    fields = {"schema", "board", "arch", "slot_layout", "boot_protocol", "channel", "os_version",
-              "os_sequence", "source", "kernel", "host_api", "app_release"}
-    if type(platform) is not dict or set(platform) != fields:
-        raise ValueError("platform schema fields")
-    for key, expected in [("schema", 1), ("board", "raspberrypi3"), ("arch", "arm64"),
-                          ("slot_layout", "pi3-mbr-v1"), ("boot_protocol", 2)]:
-        if type(platform[key]) is not type(expected) or platform[key] != expected:
-            raise ValueError(f"unsupported platform {key}")
-    if platform["channel"] not in ("dev", "stable"):
-        raise ValueError("invalid channel")
-    integer(platform["os_sequence"], 1)
-    integer(platform["host_api"], 2)
-    for key, maximum in [("os_version", 64), ("kernel", 128), ("app_release", 64)]:
-        text(platform[key], maximum)
-    if not isinstance(platform["source"], str) or not re.fullmatch("[0-9a-f]{40}", platform["source"]):
-        raise ValueError("source must be a full Git commit")
-    return platform
 
 
 def parse_defaults(raw):

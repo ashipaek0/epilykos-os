@@ -112,6 +112,11 @@ protocol-2 image build and real Pi acceptance pass.
 
 ### Task 3: Every-boot health and watchdog ownership
 
+In progress: the supervisor, unit graph and watchdog chain are implemented
+for protocol-2 cards with host coverage; see
+[evidence and pending hardware cases](../../evidence/os-updates/boot-health.md).
+Keep Task 3 unchecked until the spare-card hang/deadline/fallback cases pass.
+
 **Files:** replace internals of `rootfs-overlay/usr/bin/epilykos-mark-good`; modify its service/preset, `boot.cmd`, `linux.fragment`, `uboot.fragment`; create `rootfs-overlay/usr/lib/epilykos/python/epilykos_boot_health.py`, a systemd watchdog drop-in, `tools/test_boot_health.py` and hardware cases. All overlay paths are below `os/board/epilykos/raspberrypi3/`.
 
 **Interfaces:** supervisor starts independently of DATA/app readiness and uses one monotonic 1200-second deadline from userspace startup. Every healthy boot refreshes attempts: ordinary boots call RAUC mark-good; a pending trial delegates to Task 7's coordinator, which records confirmation intent before its mark-good. Do not mark-good twice/out of order. The protocol-2 loader arms/services the hardware watchdog before kernel launch and hands it through to systemd. Target runtime watchdog 10 s, supervisor WatchdogSec 15 s/heartbeat at most 5 s, with bounded subprocesses/shutdown reset. Prove the actual short hardware maximum/handoff on Pi.

@@ -180,5 +180,9 @@ if grep -qx 'BR2_EPILYKOS_BOOT_PROTOCOL_2=y' "${BR2_CONFIG}"; then
 		--platform "${PLATFORM_FILE}"
 	rm -f "${PLATFORM_FILE}"
 	trap - EXIT HUP INT TERM
+	# Protocol-2-only units and settings: the every-boot health supervisor
+	# instead of epilykos-mark-good, and systemd feeding the watchdog the
+	# loader armed.
+	cp -R "${BOARD_DIR}/protocol2-overlay/." "${TARGET_DIR}/"
 	echo "post-build: protocol 2 slot (OS sequence ${OS_SEQUENCE}, kernel ${KERNEL_RELEASE})"
 fi

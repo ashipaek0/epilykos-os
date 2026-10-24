@@ -24,6 +24,7 @@ test-slot-boot:
 test:
 	$(PYTHON) tools/test_slot_linux.py
 	$(PYTHON) tools/test_card_image.py
+	$(PYTHON) tools/test_boot_health.py
 	$(PYTHON) tools/test_platform_env.py
 	$(PYTHON) tools/test_bootstrap_adoption.py
 	$(PYTHON) tools/test_os_slot_acceptance.py

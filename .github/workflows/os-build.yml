@@ -288,12 +288,23 @@ jobs:
           # not in output/target: read them from the image.
           enabled() { debugfs -R "ls /etc/systemd/system/$1" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | tr -s ' ' '\n'; }
           WANTS=$(enabled multi-user.target.wants)
-          for u in epilykos.service epilykos-mark-good.service \
+          for u in epilykos.service \
                    systemd-networkd.service iwd.service epilykos-wifi-import.service \
                    epilykos-improv.service epilykos-machine-id.service \
                    epilykos-hostd.service epilykos-sshd.service; do
             echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
+          # Slot confirmation: epilykos-mark-good on protocol 1; the every-boot
+          # supervisor (and never mark-good) on protocol 2.
+          if [ "$EPILYKOS_BOOT_PROTOCOL" = 2 ]; then
+            enabled sysinit.target.wants | grep -qx epilykos-boot-health.service || { echo "epilykos-boot-health.service is not enabled"; exit 1; }
+            if echo "$WANTS" | grep -qx epilykos-mark-good.service; then echo "protocol 2 must not enable epilykos-mark-good"; exit 1; fi
+            debugfs -R "cat /usr/lib/systemd/system.conf.d/50-epilykos-watchdog.conf" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null \
+              | grep -qx 'RuntimeWatchdogSec=10s' || { echo "systemd watchdog not configured"; exit 1; }
+          else
+            echo "$WANTS" | grep -qx epilykos-mark-good.service || { echo "epilykos-mark-good.service is not enabled in rootfs.ext4"; exit 1; }
+            if enabled sysinit.target.wants | grep -qx epilykos-boot-health.service; then echo "protocol 1 must not enable epilykos-boot-health"; exit 1; fi
+          fi
           for u in epilykos-data-layout.service epilykos-data-grow.service epilykos-factory-reset.service; do
             enabled local-fs.target.wants | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done

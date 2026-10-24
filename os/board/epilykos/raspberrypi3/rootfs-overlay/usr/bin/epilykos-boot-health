@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+"""Every-boot health supervision on protocol-2 cards (epilykos_boot_health)."""
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_boot_health  # noqa: E402
+
+sys.exit(epilykos_boot_health.main())

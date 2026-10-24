@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+"""The OS update worker (epilykos-os-update.service; epilykos_os_update)."""
+import sys
+
+sys.path.insert(0, '/usr/lib/epilykos/python')
+import epilykos_os_update  # noqa: E402
+
+sys.exit(epilykos_os_update.main())

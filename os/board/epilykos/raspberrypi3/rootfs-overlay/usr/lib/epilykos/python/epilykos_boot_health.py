@@ -20,6 +20,7 @@ The loop is the only source of the service watchdog heartbeat (WatchdogSec),
 so a stuck supervisor is reset even while PID1 still feeds the hardware
 watchdog. Every command it runs is bounded and polled, never waited on.
 """
+import json
 import os
 import socket
 import subprocess
@@ -32,6 +33,7 @@ BOUNDS = {'podman_info': 60, 'health': 20, 'mark_good': 60, 'confirm': 300, 'env
 REBOOT_FORCE_S = 120
 REBOOT_SYSRQ_S = 60
 COORDINATOR = os.environ.get('EPILYKOS_OS_CONFIRM', '/usr/bin/epilykos-os-confirm')
+HEALTH_FILE = os.environ.get('EPILYKOS_OS_HEALTH', '/run/epilykos/os-health.json')
 
 
 def log(message):
@@ -109,13 +111,14 @@ def parse_env(text):
 class Supervisor:
     """State machine over one boot. step() is called every TICK_S."""
 
-    def __init__(self, *, clock, start, spawn, notify, cmdline, ismount, coordinator_exists):
+    def __init__(self, *, clock, start, spawn, notify, cmdline, ismount, coordinator_exists, record=None):
         self.clock, self.spawn, self.notify = clock, spawn, notify
         self.deadline = start + DEADLINE_S
         self.slot = booted_slot(cmdline)
         self.ismount = ismount
         self.mount_check, self.mount_checked, self.data_failed = None, None, False
         self.coordinator_exists = coordinator_exists
+        self.record = record or (lambda slot: None)
         self.state = 'checking'     # checking -> confirming -> done | rebooting
         self.pending = None
         self.reason = None
@@ -212,6 +215,9 @@ class Supervisor:
             return 'confirming'
         if result[0] == 0:
             log('slot confirmed; attempts refreshed' if not is_trial else 'trial confirmed by the coordinator')
+            if not is_trial:
+                # OS update admission needs a confirmed, healthy running slot.
+                self.record(self.slot)
         else:
             log(f'confirmation failed ({result[0]}); attempts not refreshed')
         self.state = 'done'
@@ -247,6 +253,18 @@ class Supervisor:
         return 'rebooting'
 
 
+def record_confirmed(slot, path=HEALTH_FILE):
+    """This boot's slot is confirmed healthy (read by epilykos_os_update)."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temporary = path + '.tmp'
+        with open(temporary, 'w') as stream:
+            json.dump({'schema': 1, 'state': 'confirmed', 'slot': slot}, stream)
+        os.replace(temporary, path)
+    except OSError as exc:
+        log(f'could not record the confirmed slot: {exc}')
+
+
 def run_bounded(argv, bound):
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=bound)
@@ -269,7 +287,7 @@ def main():
         spawn=lambda argv: subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                             stdin=subprocess.DEVNULL, text=True),
         notify=notifier.send, cmdline=cmdline, ismount=os.path.ismount,
-        coordinator_exists=lambda: os.access(COORDINATOR, os.X_OK))
+        coordinator_exists=lambda: os.access(COORDINATOR, os.X_OK), record=record_confirmed)
     notifier.send('READY=1')
     log(f'supervising slot {supervisor.slot}; deadline {DEADLINE_S} s after userspace start')
     while True:

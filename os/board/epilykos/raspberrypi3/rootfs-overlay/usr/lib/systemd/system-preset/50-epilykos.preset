@@ -18,6 +18,8 @@ enable epilykos-mark-good.service
 # Protocol-2 cards use the every-boot supervisor instead
 # (protocol2-overlay/…/40-epilykos-protocol2.preset).
 disable epilykos-boot-health.service
+# OS update jobs: started only by epilykos-hostd (protocol-2 cards).
+disable epilykos-os-update.service
 enable bluetooth.service
 enable rauc.service
 enable systemd-networkd.service

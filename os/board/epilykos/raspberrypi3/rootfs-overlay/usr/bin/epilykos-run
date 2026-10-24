@@ -61,6 +61,8 @@ set -- \
 	--volume /run/epilykos-host:/run/epilykos-host \
 	--env EPILYKOS_HOST_SOCKET=/run/epilykos-host/host.sock \
 	--env EPILYKOS_MAINTENANCE_LOCK=/app/data/.maintenance.lock \
+	--volume /data/epilykos/os-updater/public:/run/epilykos-os-updater:ro \
+	--env EPILYKOS_OS_UPDATE_GUARD=/run/epilykos-os-updater/guard.json \
 	--volume /etc/localtime:/etc/localtime:ro \
 	--volume /run/epilykos:/run/epilykos:ro \
 	--env EPILYKOS_CLOCK_FILE=/run/epilykos/clock.json \

@@ -43,6 +43,10 @@ on:
         description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor), or auto (one above the published channel pointer)'
         required: false
         default: ''
+      publish_test_package_from_run:
+        description: 'Spare-card acceptance only: publish the TEST-ONLY package of this earlier protocol-2 run as a test release and the dev pointer (no build)'
+        required: false
+        default: ''
       test_trust_from_run:
         description: 'Protocol 2 only: reuse the TEST-ONLY trust of this earlier run, so its card accepts this build''s test package'
         required: false
@@ -105,7 +109,7 @@ jobs:
 
   build:
     needs: validate
-    if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
+    if: ${{ !github.event.inputs.image_from_run && !github.event.inputs.publish_test_package_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
@@ -579,6 +583,70 @@ jobs:
           gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-pointer"
           python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/pointer" --downloaded "$RUNNER_TEMP/back-pointer"
           { echo "### OS update package published"; echo; echo '```json'; cat assets.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # Spare-card acceptance (design §12): make a TEST-ONLY package reachable by
+  # the test card it was built for. The entry is re-signed with that run's
+  # own TEST-ONLY delegated key for the URL of the test release; the dev
+  # pointer then names it. Only on an explicit request; never maintainer
+  # trust or the signing environments. A real dev publication replaces it.
+  test-package-publish:
+    needs: validate
+    if: github.event.inputs.publish_test_package_from_run != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RUN: ${{ github.event.inputs.publish_test_package_from_run }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-test-package
+          run-id: ${{ github.event.inputs.publish_test_package_from_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/package
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-test-trust
+          run-id: ${{ github.event.inputs.publish_test_package_from_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/trust
+      - name: Re-sign the entry for its test release
+        run: |
+          set -e
+          case "$RUN" in ''|*[!0-9]*) echo "::error::publish_test_package_from_run must be a run ID"; exit 1 ;; esac
+          test -f "$RUNNER_TEMP/trust/TEST-ONLY.txt"
+          chmod 600 "$RUNNER_TEMP"/trust/private/*
+          CHANNEL=$(python3 -c 'import json,glob,sys; print(json.load(open(glob.glob(sys.argv[1])[0]))["channel"])' "$RUNNER_TEMP/package/*.entry.json")
+          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+          echo "TAG=os-$CHANNEL-test-$RUN" >> "$GITHUB_ENV"
+          python3 tools/os_release.py test-entry --package "$RUNNER_TEMP/package" --trust "$RUNNER_TEMP/trust" \
+            --repository "$GITHUB_REPOSITORY" --tag "os-$CHANNEL-test-$RUN"
+          python3 tools/os_release.py assets --package "$RUNNER_TEMP/package" --trust "$RUNNER_TEMP/trust" \
+            --channel "$CHANNEL" --output "$RUNNER_TEMP/assets" --tag "os-$CHANNEL-test-$RUN" | tee assets.json
+      - name: Upload the package release
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "TEST-ONLY OS update package (run $RUN)" \
+            --notes "TEST-ONLY trust from run $RUN, for the spare-card acceptance. Never install on the working box." \
+            "$RUNNER_TEMP"/assets/package/*
+      - name: Read the package back
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-package"
+          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/package" --downloaded "$RUNNER_TEMP/back-package"
+      - name: Move the channel pointer
+        run: |
+          gh release view "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "EpilykosOS update pointer ($CHANNEL)" --notes "The newest OS update package for the $CHANNEL channel."
+          gh release upload "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP"/assets/pointer/*
+      - name: Read the pointer back
+        run: |
+          gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-pointer"
+          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/pointer" --downloaded "$RUNNER_TEMP/back-pointer"
+          { echo "### TEST-ONLY OS update published"; echo; echo '```json'; cat assets.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   pipeline-policy:
     needs: [validate, build]

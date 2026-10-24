@@ -40,7 +40,11 @@ on:
         type: choice
         options: ['1', '2']
       os_sequence:
-        description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor)'
+        description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor), or auto (one above the published channel pointer)'
+        required: false
+        default: ''
+      test_trust_from_run:
+        description: 'Protocol 2 only: reuse the TEST-ONLY trust of this earlier run, so its card accepts this build''s test package'
         required: false
         default: ''
   # A release you create on GitHub (Releases -> Draft a new release, tag
@@ -104,6 +108,9 @@ jobs:
     if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    permissions:
+      contents: read
+      actions: read      # an earlier run's TEST-ONLY trust (test_trust_from_run)
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -111,6 +118,8 @@ jobs:
       channel: ${{ env.EPILYKOS_CHANNEL }}
       image_available: ${{ steps.image-artifact.outcome == 'success' }}
       image_sha256: ${{ steps.compress.outputs.image_sha256 }}
+      os_sequence: ${{ steps.p2.outputs.sequence }}
+      os_publish: ${{ steps.os-publish.outputs.os_publish }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -180,21 +189,49 @@ jobs:
       # (keys/os-release/<channel>/) the card gets throwaway TEST-ONLY trust
       # (tools/os_test_trust.py), uploaded beside it for signing test
       # packages. Protocol-2 images are never published (image_release_policy).
+      - name: Earlier TEST-ONLY trust
+        if: env.EPILYKOS_BOOT_PROTOCOL == '2' && github.event.inputs.test_trust_from_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-test-trust
+          run-id: ${{ github.event.inputs.test_trust_from_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/os-test-trust
+
       - name: Protocol-2 inputs
+        id: p2
         if: env.EPILYKOS_BOOT_PROTOCOL == '2'
         env:
           OS_SEQUENCE: ${{ github.event.inputs.os_sequence }}
+          TRUST_RUN: ${{ github.event.inputs.test_trust_from_run }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$OS_SEQUENCE" = auto ]; then
+            # One above the channel's published pointer (or 1 for a new
+            # channel); os-package checks it again before publishing.
+            mkdir -p "$RUNNER_TEMP/pointer"
+            gh release download "os-$EPILYKOS_CHANNEL" --repo "$GITHUB_REPOSITORY" \
+              --pattern "os-index-$EPILYKOS_CHANNEL.json" --dir "$RUNNER_TEMP/pointer" 2>/dev/null || true
+            OS_SEQUENCE=$(python3 tools/os_release.py next-sequence --channel "$EPILYKOS_CHANNEL" \
+              --current "$RUNNER_TEMP/pointer/os-index-$EPILYKOS_CHANNEL.json" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["sequence"])')
+          fi
           case "$OS_SEQUENCE" in
-            ''|0*|*[!0-9]*) echo "::error::boot_protocol 2 needs os_sequence (a positive integer)"; exit 1 ;;
+            ''|0*|*[!0-9]*) echo "::error::boot_protocol 2 needs os_sequence (a positive integer or auto)"; exit 1 ;;
           esac
+          echo "sequence=$OS_SEQUENCE" >> "$GITHUB_OUTPUT"
           echo "EPILYKOS_OS_SEQUENCE=$OS_SEQUENCE" >> "$GITHUB_ENV"
           echo "EPILYKOS_SOURCE_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
           if [ -f "keys/os-release/$EPILYKOS_CHANNEL/os-policy.json" ]; then
             echo "EPILYKOS_TRUST_DIR=$PWD/keys/os-release/$EPILYKOS_CHANNEL" >> "$GITHUB_ENV"
             echo "TRUST_LABEL=maintainer-trust" >> "$GITHUB_ENV"
           else
-            python3 tools/os_test_trust.py --output "$RUNNER_TEMP/os-test-trust" --channel "$EPILYKOS_CHANNEL"
+            if [ -f "$RUNNER_TEMP/os-test-trust/TEST-ONLY.txt" ]; then
+              echo "Reusing the TEST-ONLY trust of run $TRUST_RUN"
+              chmod 600 "$RUNNER_TEMP"/os-test-trust/private/*
+            else
+              python3 tools/os_test_trust.py --output "$RUNNER_TEMP/os-test-trust" --channel "$EPILYKOS_CHANNEL"
+            fi
             echo "EPILYKOS_TRUST_DIR=$RUNNER_TEMP/os-test-trust" >> "$GITHUB_ENV"
             echo "TRUST_LABEL=test-trust" >> "$GITHUB_ENV"
           fi
@@ -403,6 +440,36 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # A maintainer-trust protocol-2 build keeps the exact rootfs of its card
+      # slots, from which the protected os-package job makes the update.
+      - name: OS package rootfs
+        if: steps.build.outcome == 'success' && env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'maintainer-trust'
+        run: zstd -12 -T0 "$IMAGES_DIR/rootfs.ext4" -o "$RUNNER_TEMP/rootfs.ext4.zst"
+      - uses: actions/upload-artifact@v4
+        id: rootfs-artifact
+        if: steps.build.outcome == 'success' && env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'maintainer-trust'
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-rootfs
+          path: ${{ runner.temp }}/rootfs.ext4.zst
+          retention-days: 14
+          if-no-files-found: error
+      - name: OS package publication gate
+        id: os-publish
+        if: always()
+        env:
+          SOURCE_ON_MAIN: ${{ needs.validate.outputs.source_on_main }}
+          BUILD: ${{ steps.build.outcome }}
+          ROOTFS: ${{ steps.rootfs-artifact.outcome == 'success' }}
+          SEQUENCE: ${{ steps.p2.outputs.sequence }}
+          PUBLISH_ENABLED: ${{ vars.EPILYKOS_OS_PUBLISH }}
+          IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
+        run: |
+          python3 tools/os_release.py decide --channel "$EPILYKOS_CHANNEL" --ref "$GITHUB_REF" \
+            --event "$GITHUB_EVENT_NAME" --source-on-main "$SOURCE_ON_MAIN" --boot-protocol "$EPILYKOS_BOOT_PROTOCOL" \
+            --trust-label "${TRUST_LABEL:-}" --build "$BUILD" --rootfs-uploaded "$ROOTFS" --sequence "$SEQUENCE" \
+            --publication-enabled "$PUBLISH_ENABLED" --image-from-run "$IMAGE_FROM_RUN" \
+            --github-output "$GITHUB_OUTPUT" | tee os-publish.json
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -412,6 +479,106 @@ jobs:
             os/build/buildroot-*/.config
           retention-days: 14
           if-no-files-found: ignore
+
+  # Signs and publishes the OS update package of a maintainer-trust
+  # protocol-2 build: the same rootfs as the card, delegated keys from the
+  # channel's protected environment (os-stable accepts main, os-dev accepts
+  # dev), never the offline roots. The immutable package release first, read
+  # back unchanged; the channel pointer moves last. One at a time per channel.
+  os-package:
+    needs: [validate, build]
+    if: needs.build.outputs.os_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: os-${{ needs.build.outputs.channel }}
+    permissions:
+      contents: write
+    concurrency:
+      group: os-publish-${{ needs.build.outputs.channel }}
+      cancel-in-progress: false
+    env:
+      CHANNEL: ${{ needs.build.outputs.channel }}
+      SEQUENCE: ${{ needs.build.outputs.os_sequence }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config libglib2.0-dev libssl-dev \
+            squashfs-tools e2fsprogs zstd
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-rootfs
+          path: ${{ runner.temp }}/rootfs
+      - name: Host RAUC 1.15.2
+        run: |
+          git clone -q --depth 1 --branch v1.15.2 https://github.com/rauc/rauc.git "$RUNNER_TEMP/rauc-src"
+          meson setup "$RUNNER_TEMP/rauc-build" "$RUNNER_TEMP/rauc-src" -Dservice=false -Dnetwork=false \
+            -Dstreaming=false -Djson=disabled -Dgpt=disabled -Dtests=false
+          meson compile -C "$RUNNER_TEMP/rauc-build"
+          "$RUNNER_TEMP/rauc-build/rauc" --version | grep -qx 'rauc v1.15.2'
+      - name: Sequence is still unused
+        run: |
+          mkdir -p "$RUNNER_TEMP/pointer"
+          gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --pattern "os-index-$CHANNEL.json" \
+            --dir "$RUNNER_TEMP/pointer" 2>/dev/null || true
+          python3 tools/os_release.py check-sequence --channel "$CHANNEL" --sequence "$SEQUENCE" \
+            --current "$RUNNER_TEMP/pointer/os-index-$CHANNEL.json"
+          if gh release view "os-$CHANNEL-$SEQUENCE" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::os-$CHANNEL-$SEQUENCE already exists; a sequence is never reused"; exit 1
+          fi
+      - name: Package from the build's rootfs
+        env:
+          OS_INDEX_KEY: ${{ secrets.OS_INDEX_KEY }}
+          OS_INDEX_KEY_ID: ${{ vars.OS_INDEX_KEY_ID }}
+          OS_RAUC_KEY: ${{ secrets.OS_RAUC_KEY }}
+          OS_RAUC_CERT: ${{ vars.OS_RAUC_CERT }}
+        run: |
+          set -e
+          umask 077
+          keys="$RUNNER_TEMP/keys"; mkdir -p "$keys"
+          for v in OS_INDEX_KEY OS_INDEX_KEY_ID OS_RAUC_KEY OS_RAUC_CERT; do
+            [ -n "${!v}" ] || { echo "::error::$v is not configured in the os-$CHANNEL environment"; exit 1; }
+          done
+          printf '%s\n' "$OS_INDEX_KEY" > "$keys/index.key"
+          printf '%s\n' "$OS_RAUC_KEY" > "$keys/rauc.key"
+          printf '%s\n' "$OS_RAUC_CERT" > "$keys/rauc.pem"
+          zstd -d -q "$RUNNER_TEMP/rootfs/rootfs.ext4.zst" -o "$RUNNER_TEMP/rootfs.ext4"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/os-$CHANNEL-$SEQUENCE"
+          python3 tools/build_os_bundle.py --rauc "$RUNNER_TEMP/rauc-build/rauc" --rootfs "$RUNNER_TEMP/rootfs.ext4" \
+            --output "$RUNNER_TEMP/package" --cert "$keys/rauc.pem" --key "$keys/rauc.key" \
+            --index-key "$keys/index.key" --index-key-id "$OS_INDEX_KEY_ID" --trust "keys/os-release/$CHANNEL" \
+            --url-base "$base" --notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/os-$CHANNEL-$SEQUENCE"
+          rm -rf "$keys"
+          python3 tools/os_release.py assets --package "$RUNNER_TEMP/package" --trust "keys/os-release/$CHANNEL" \
+            --channel "$CHANNEL" --output "$RUNNER_TEMP/assets" | tee assets.json
+      - name: Upload the package release
+        run: |
+          gh release create "os-$CHANNEL-$SEQUENCE" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "EpilykosOS update package ($CHANNEL, sequence $SEQUENCE)" --prerelease \
+            --notes "Signed OS update package for Settings > Updates. Installed by the box, not flashed." \
+            "$RUNNER_TEMP"/assets/package/*
+      - name: Read the package back
+        run: |
+          gh release download "os-$CHANNEL-$SEQUENCE" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-package"
+          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/package" --downloaded "$RUNNER_TEMP/back-package"
+          python3 tools/verify_os_release.py --root "keys/os-release/$CHANNEL/os-index-root.pem" \
+            --policy "keys/os-release/$CHANNEL/os-policy.json" --policy-sig "keys/os-release/$CHANNEL/os-policy.sig" \
+            --entry "$RUNNER_TEMP"/back-package/*.entry.json --entry-sig "$RUNNER_TEMP"/back-package/*.entry.sig \
+            --platform <(debugfs -R 'cat /usr/lib/epilykos/platform.json' "$RUNNER_TEMP/rootfs.ext4" 2>/dev/null) \
+            --bundle "$RUNNER_TEMP"/back-package/*.raucb
+      - name: Move the channel pointer
+        run: |
+          gh release view "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "EpilykosOS update pointer ($CHANNEL)" --notes "The newest OS update package for the $CHANNEL channel."
+          gh release upload "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP"/assets/pointer/*
+      - name: Read the pointer back
+        run: |
+          gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-pointer"
+          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/pointer" --downloaded "$RUNNER_TEMP/back-pointer"
+          { echo "### OS update package published"; echo; echo '```json'; cat assets.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   pipeline-policy:
     needs: [validate, build]

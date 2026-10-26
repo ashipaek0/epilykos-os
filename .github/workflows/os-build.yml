@@ -382,7 +382,9 @@ jobs:
       # slots, from which the protected os-package job makes the update.
       - name: OS package rootfs
         if: steps.build.outcome == 'success' && env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'maintainer-trust'
-        run: zstd -12 -T0 "$IMAGES_DIR/rootfs.ext4" -o "$RUNNER_TEMP/rootfs.ext4.zst"
+        # rootfs.ext4 is a symlink to Buildroot's rootfs.ext2, which zstd refuses
+        # to read without following it by hand.
+        run: zstd -12 -T0 "$(readlink -f "$IMAGES_DIR/rootfs.ext4")" -o "$RUNNER_TEMP/rootfs.ext4.zst"
       - uses: actions/upload-artifact@v4
         id: rootfs-artifact
         if: steps.build.outcome == 'success' && env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'maintainer-trust'

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate TEST-ONLY OS trust material for protocol-2 test cards.
+"""Generate TEST-ONLY OS trust material for the repository's own tests.
 
 Production trust is the maintainer's offline roots (design §6.5, D2); this
-makes a throwaway equivalent for building and accepting test cards on a
-spare SD card, never for a published image:
+makes a throwaway equivalent that the card-image, bundle and release tests
+build against. The pipeline never uses it: a protocol-2 build refuses
+without the maintainer's committed trust:
 
   os-index-root.pem   offline index root public key (pinned on BOOT)
   os-policy.json      root-signed trust policy, epoch 1 (canonical bytes)

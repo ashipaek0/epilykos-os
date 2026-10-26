@@ -126,4 +126,12 @@ try:
 finally:
     shutil.rmtree(tmp)
 
+# The stable sync builds main itself only when dev has no OS changes main lacks;
+# otherwise the dev -> main merge is the one release build.
+workflow = (ROOT / '.github/workflows/app-release-sync.yml').read_text()
+gate = workflow[workflow.index('if [ "$CHANNEL" = stable ]'):]
+assert 'git diff --quiet origin/main FETCH_HEAD -- os .github/workflows/os-build.yml' in gate
+assert gate.index('git diff --quiet') < gate.index('gh workflow run os-build.yml')
+ok('stable sync starts a main build only when dev has no pending OS changes')
+
 print('\nPASS sync self-tests')

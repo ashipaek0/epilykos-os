@@ -25,6 +25,8 @@ Tests: `tools/test_os_release.py` (8) covers the gate per condition and channel,
 
 ## The spare-card acceptance (to do on hardware)
 
+> **Record only.** The acceptance has since been run and the updater accepted by the maintainer. The pipeline no longer has the TEST-ONLY build, test-package publication or trust-reuse paths this section describes (`publish_test_package_from_run`, `test_trust_from_run`); a protocol-2 build now needs the maintainer's committed trust. The recorder in `tools/hardware/` stays for future acceptance runs.
+
 Never on the working box. The tools are `tools/hardware/os_slot_acceptance.py` (`init`, `observe --checkpoint … --phase before|after`, `report`). It records what it sees and never marks anything passed.
 
 ### Builds to make

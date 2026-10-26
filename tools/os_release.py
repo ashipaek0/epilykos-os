@@ -85,45 +85,11 @@ def names(package):
     return bundles[0], package / f'{stem}.entry.json', package / f'{stem}.entry.sig'
 
 
-def test_only(trust_dir):
-    return (Path(trust_dir) / 'TEST-ONLY.txt').is_file()
-
-
-def test_entry(package, trust_dir, repository, tag):
-    """Re-sign a TEST-ONLY package's entry so its bundle URL is the test
-    release it will be uploaded to (a build signs its run page instead).
-    Only with TEST-ONLY trust, which carries its delegated private key."""
-    trust_dir = Path(trust_dir)
-    if not test_only(trust_dir):
-        raise ValueError('only TEST-ONLY trust may re-sign an entry')
-    if not re.fullmatch(r'[A-Za-z0-9-]+/[A-Za-z0-9._-]+', repository) or \
-            not re.fullmatch(r'os-(dev|stable)-test-[0-9]{1,20}', tag):
-        raise ValueError('invalid repository or test tag')
-    bundle, entry_file, sig_file = names(package)
-    entry = json.loads(entry_file.read_bytes())
-    key = trust_dir / 'private' / f'{entry["index_key_id"]}.key'
-    entry['bundle']['url'] = f'https://github.com/{repository}/releases/download/{tag}/{bundle.name}'
-    entry['notes_url'] = f'https://github.com/{repository}/releases/tag/{tag}'
-    raw = trust.canonical(entry)
-    with tempfile.TemporaryDirectory(prefix='epk-sign-') as directory:
-        data = Path(directory) / 'entry'
-        data.write_bytes(raw)
-        signature = subprocess.run(
-            ['openssl', 'pkeyutl', '-sign', '-rawin', '-inkey', str(key), '-in', str(data)],
-            check=True, capture_output=True, timeout=30).stdout
-    entry_file.write_bytes(raw)
-    sig_file.write_bytes(signature)
-    return {'tag': tag, 'url': entry['bundle']['url'], 'sequence': entry['sequence']}
-
-
-def assets(package, trust_dir, channel, out, existing=(), tag=None):
+def assets(package, trust_dir, channel, out, existing=()):
     """Copy and re-verify the exact upload set; refuse collisions with
-    assets an immutable package release already has. A test tag is only
-    for TEST-ONLY trust."""
+    assets an immutable package release already has."""
     if channel not in CHANNELS:
         raise ValueError('unknown channel')
-    if tag is not None and (not test_only(trust_dir) or not re.fullmatch(rf'os-{channel}-test-[0-9]{{1,20}}', tag)):
-        raise ValueError('a test release tag needs TEST-ONLY trust')
     bundle, entry_file, sig_file = names(package)
     trust_dir, out = Path(trust_dir), Path(out)
     raw, sig = entry_file.read_bytes(), sig_file.read_bytes()
@@ -132,7 +98,7 @@ def assets(package, trust_dir, channel, out, existing=(), tag=None):
                                  board='raspberrypi3', channel=channel)
     platform = {'board': 'raspberrypi3', 'channel': channel, 'host_api': trust.HOST_API}
     entry = trust.verify_os_release(raw, sig, platform, policy)
-    release = tag or f'os-{channel}-{entry["sequence"]}'
+    release = f'os-{channel}-{entry["sequence"]}'
     if not entry['bundle']['url'].endswith('/' + bundle.name) or f'/{release}/' not in entry['bundle']['url']:
         raise ValueError('the entry does not point at its own immutable package release')
     with tempfile.TemporaryDirectory(prefix='epk-keyring-') as directory:
@@ -185,12 +151,6 @@ def main():
     a.add_argument('--channel', choices=CHANNELS, required=True)
     a.add_argument('--output', type=Path, required=True)
     a.add_argument('--existing', nargs='*', default=[])
-    a.add_argument('--tag', help='a TEST-ONLY release tag (os-<channel>-test-<run>)')
-    t = sub.add_parser('test-entry')
-    t.add_argument('--package', type=Path, required=True)
-    t.add_argument('--trust', type=Path, required=True)
-    t.add_argument('--repository', required=True)
-    t.add_argument('--tag', required=True)
     m = sub.add_parser('compare')
     m.add_argument('--expected', type=Path, required=True)
     m.add_argument('--downloaded', type=Path, required=True)
@@ -210,9 +170,7 @@ def main():
             check_sequence(current(args.current), args.channel, args.sequence)
             result = {'sequence': args.sequence}
         elif args.action == 'assets':
-            result = assets(args.package, args.trust, args.channel, args.output, args.existing, args.tag)
-        elif args.action == 'test-entry':
-            result = test_entry(args.package, args.trust, args.repository, args.tag)
+            result = assets(args.package, args.trust, args.channel, args.output, args.existing)
         else:
             result = {'unchanged': compare(args.expected, args.downloaded)}
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:

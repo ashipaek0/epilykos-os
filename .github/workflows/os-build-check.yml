@@ -83,7 +83,8 @@ jobs:
             done
           done
           systemd-analyze verify --man=no "$OVERLAY"/usr/lib/systemd/system/epilykos*.service 2>&1 \
-            | grep -v 'is not executable\|bluetooth.service\|rauc.service\|podman' | tee verify.log
+            | grep -v 'is not executable\|bluetooth.service\|rauc.service\|podman' \
+            | grep -v '^/usr/lib/systemd/' | tee verify.log   # the runner's own units, loaded as dependencies
           test ! -s verify.log
       - name: Wi-Fi setup over Bluetooth (Improv) against fake BlueZ and iwd
         run: |

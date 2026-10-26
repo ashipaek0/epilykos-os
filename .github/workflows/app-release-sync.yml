@@ -84,5 +84,13 @@ jobs:
           # Also recover a previous run which merged but failed before publication.
           gh workflow run app-manifest-publish.yml --ref "$BASE"
           if [ "$CHANNEL" = stable ]; then
-            gh workflow run os-build.yml --ref main -f board=raspberrypi3 -f channel=stable
+            # One release build: if dev still has OS changes main lacks, merging
+            # dev into main builds with this manifest, so a build now would be
+            # a second, stale one.
+            git fetch --quiet --depth=1 origin dev
+            if git diff --quiet origin/main FETCH_HEAD -- os .github/workflows/os-build.yml; then
+              gh workflow run os-build.yml --ref main -f board=raspberrypi3 -f channel=stable
+            else
+              echo "::notice::dev has OS changes main lacks; the release builds when dev is merged into main."
+            fi
           fi

@@ -130,58 +130,6 @@ class PackageTests(unittest.TestCase):
             os_release.next_sequence(raw, 'dev')
 
 
-class TestPackageTests(unittest.TestCase):
-    """A TEST-ONLY build signs its run page as the bundle URL; for the
-    spare-card acceptance the entry is re-signed for its test release."""
-
-    def setUp(self):
-        import os_test_trust
-        from types import SimpleNamespace
-        self.temp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.temp.name)
-        self.trust = self.dir / 'trust'
-        os_test_trust.generate(self.trust, 'dev', 'dev-test-1')
-        self.package = self.dir / 'package'
-        self.package.mkdir()
-        leaf = SimpleNamespace(leaves={'leaf': (self.trust / 'private/rauc-signing.key', self.trust / 'rauc-signing.pem', None)})
-        bundle = fx.signed_bundle(leaf, 'leaf', self.package / 'epilykos-os-0.9-raspberrypi3.raucb', sequence=2)
-        (self.package / 'manifest.raucm').unlink()
-        data = bundle.read_bytes()
-        entry = {'schema': 1, 'board': 'raspberrypi3', 'channel': 'dev', 'sequence': 2, 'trust_epoch': 1,
-                 'index_key_id': 'dev-test-1', 'version': '0.9', 'boot_protocol': 2, 'min_host_api': 2,
-                 'bundle': {'url': 'https://github.com/ashipaek0/epilykos-os/actions/runs/7/' + bundle.name,
-                            'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()},
-                 'notes_url': 'https://github.com/ashipaek0/epilykos-os/actions/runs/7'}
-        (self.package / 'epilykos-os-0.9-raspberrypi3.entry.json').write_bytes(trust.canonical(entry))
-        (self.package / 'epilykos-os-0.9-raspberrypi3.entry.sig').write_bytes(b'\0' * 64)
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def test_resigned_for_its_test_release_and_publishable_there_only(self):
-        with self.assertRaises(ValueError):
-            os_release.assets(self.package, self.trust, 'dev', self.dir / 'out-before', tag='os-dev-test-7')
-        result = os_release.test_entry(self.package, self.trust, 'ashipaek0/epilykos-os', 'os-dev-test-7')
-        self.assertEqual(result['url'], f'{REPO}/os-dev-test-7/epilykos-os-0.9-raspberrypi3.raucb')
-        out = os_release.assets(self.package, self.trust, 'dev', self.dir / 'out', tag='os-dev-test-7')
-        self.assertEqual((out['tag'], out['pointer'], out['sequence']), ('os-dev-test-7', 'os-dev', 2))
-        with self.assertRaises(ValueError):
-            os_release.assets(self.package, self.trust, 'dev', self.dir / 'out-2')   # not os-dev-2
-
-    def test_never_with_maintainer_trust_or_odd_tags(self):
-        maintainer = self.dir / 'maintainer'
-        shutil.copytree(self.trust, maintainer)
-        (maintainer / 'TEST-ONLY.txt').unlink()
-        with self.assertRaisesRegex(ValueError, 'TEST-ONLY'):
-            os_release.test_entry(self.package, maintainer, 'ashipaek0/epilykos-os', 'os-dev-test-7')
-        for repository, tag in (('ashipaek0/epilykos-os', 'os-dev-2'), ('a b', 'os-dev-test-7'),
-                                ('ashipaek0/epilykos-os', 'os-dev-test-7/../x')):
-            with self.subTest(tag=tag), self.assertRaises(ValueError):
-                os_release.test_entry(self.package, self.trust, repository, tag)
-        with self.assertRaises(ValueError):
-            os_release.assets(self.package, maintainer, 'dev', self.dir / 'o', tag='os-dev-test-7')
-
-
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         import yaml
@@ -205,17 +153,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('os-index-root.key', text, 'no root private key in CI')
         self.assertIn('check-sequence', text)
 
-    def test_test_packages_publish_only_on_request_and_only_test_trust(self):
-        job = self.workflow['jobs']['test-package-publish']
-        self.assertEqual(job['if'], "github.event.inputs.publish_test_package_from_run != ''")
-        self.assertEqual(job['permissions'], {'contents': 'write', 'actions': 'read'})
-        text = json.dumps(job)
-        self.assertIn('protocol2-test-trust', text)
-        self.assertIn('test-entry', text)
-        self.assertNotIn('secrets.', text, 'TEST-ONLY keys only, never the signing environment')
-        names = [step.get('name', '') for step in job['steps']]
-        self.assertLess(names.index('Read the package back'), names.index('Move the channel pointer'))
-        self.assertIn('publish_test_package_from_run', self.workflow['jobs']['build']['if'])
+    def test_no_test_only_publication_path(self):
+        text = json.dumps(self.workflow)
+        self.assertNotIn('test-package-publish', self.workflow['jobs'])
+        for name in ('publish_test_package_from_run', 'test_trust_from_run', 'test-entry', 'TEST-ONLY', 'os_test_trust'):
+            self.assertNotIn(name, text)
+
+    def test_protocol_2_needs_the_maintainers_committed_trust(self):
+        step = next(s for s in self.workflow['jobs']['build']['steps'] if s.get('name') == 'Protocol-2 inputs')
+        self.assertIn('keys/os-release/$EPILYKOS_CHANNEL/os-policy.json', step['run'])
+        self.assertIn('exit 1', step['run'])
+        self.assertIn('TRUST_LABEL=maintainer-trust', step['run'])
+        self.assertNotIn('test-trust', step['run'])
 
     def test_the_package_is_made_from_the_same_rootfs_as_the_card(self):
         build = json.dumps(self.workflow['jobs']['build'])

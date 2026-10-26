@@ -25,8 +25,8 @@ grep -qx 'BR2_EPILYKOS_BOOT_PROTOCOL_2=y' "${BR2_CONFIG}" && PROTOCOL2=true
 # the trust policy signed by the offline OS index root, whose public key is
 # pinned on BOOT (tools/os_bootstrap.py verifies the policy against it).
 # EPILYKOS_TRUST_DIR holds os-policy.json, os-policy.sig and
-# os-index-root.pem (the maintainer's, or tools/os_test_trust.py's for a
-# test card); without them the build stops rather than ship blank state.
+# os-index-root.pem (the maintainer's, or tools/os_test_trust.py's in the
+# tests); without them the build stops rather than ship blank state.
 if ${PROTOCOL2}; then
 	REPO_DIR="$(cd "${BOARD_DIR}/../../../.." && pwd)"
 	PLATFORM_JSON="${TARGET_DIR}/usr/lib/epilykos/platform.json"

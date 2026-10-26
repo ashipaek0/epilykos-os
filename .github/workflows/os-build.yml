@@ -34,21 +34,13 @@ on:
         required: false
         default: ''
       boot_protocol:
-        description: 'Card protocol: 1 (shipping) or 2 (OS updates; development, never published)'
+        description: 'Card protocol: 1 (shipping) or 2 (OS updates; needs the maintainer trust in keys/os-release/<channel>/)'
         required: false
         default: '1'
         type: choice
         options: ['1', '2']
       os_sequence:
         description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor), or auto (one above the published channel pointer)'
-        required: false
-        default: ''
-      publish_test_package_from_run:
-        description: 'Spare-card acceptance only: publish the TEST-ONLY package of this earlier protocol-2 run as a test release and the dev pointer (no build)'
-        required: false
-        default: ''
-      test_trust_from_run:
-        description: 'Protocol 2 only: reuse the TEST-ONLY trust of this earlier run, so its card accepts this build''s test package'
         required: false
         default: ''
   # A release you create on GitHub (Releases -> Draft a new release, tag
@@ -109,12 +101,11 @@ jobs:
 
   build:
     needs: validate
-    if: ${{ !github.event.inputs.image_from_run && !github.event.inputs.publish_test_package_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
+    if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
       contents: read
-      actions: read      # an earlier run's TEST-ONLY trust (test_trust_from_run)
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -188,26 +179,14 @@ jobs:
             os-ccache-${{ runner.os }}-${{ env.BOARD }}-
             os-ccache-${{ runner.os }}-
 
-      # Protocol 2 needs the OS sequence and the trust material the card is
-      # seeded with. Without the maintainer's committed public trust
-      # (keys/os-release/<channel>/) the card gets throwaway TEST-ONLY trust
-      # (tools/os_test_trust.py), uploaded beside it for signing test
-      # packages. Protocol-2 images are never published (image_release_policy).
-      - name: Earlier TEST-ONLY trust
-        if: env.EPILYKOS_BOOT_PROTOCOL == '2' && github.event.inputs.test_trust_from_run != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: epilykos-${{ env.BOARD }}-protocol2-test-trust
-          run-id: ${{ github.event.inputs.test_trust_from_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/os-test-trust
-
+      # Protocol 2 needs the OS sequence and the maintainer's committed public
+      # trust (keys/os-release/<channel>/): a card seeded with anything else
+      # could never take a published update, so the build refuses.
       - name: Protocol-2 inputs
         id: p2
         if: env.EPILYKOS_BOOT_PROTOCOL == '2'
         env:
           OS_SEQUENCE: ${{ github.event.inputs.os_sequence }}
-          TRUST_RUN: ${{ github.event.inputs.test_trust_from_run }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$OS_SEQUENCE" = auto ]; then
@@ -226,19 +205,12 @@ jobs:
           echo "sequence=$OS_SEQUENCE" >> "$GITHUB_OUTPUT"
           echo "EPILYKOS_OS_SEQUENCE=$OS_SEQUENCE" >> "$GITHUB_ENV"
           echo "EPILYKOS_SOURCE_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
-          if [ -f "keys/os-release/$EPILYKOS_CHANNEL/os-policy.json" ]; then
-            echo "EPILYKOS_TRUST_DIR=$PWD/keys/os-release/$EPILYKOS_CHANNEL" >> "$GITHUB_ENV"
-            echo "TRUST_LABEL=maintainer-trust" >> "$GITHUB_ENV"
-          else
-            if [ -f "$RUNNER_TEMP/os-test-trust/TEST-ONLY.txt" ]; then
-              echo "Reusing the TEST-ONLY trust of run $TRUST_RUN"
-              chmod 600 "$RUNNER_TEMP"/os-test-trust/private/*
-            else
-              python3 tools/os_test_trust.py --output "$RUNNER_TEMP/os-test-trust" --channel "$EPILYKOS_CHANNEL"
-            fi
-            echo "EPILYKOS_TRUST_DIR=$RUNNER_TEMP/os-test-trust" >> "$GITHUB_ENV"
-            echo "TRUST_LABEL=test-trust" >> "$GITHUB_ENV"
+          if [ ! -f "keys/os-release/$EPILYKOS_CHANNEL/os-policy.json" ]; then
+            echo "::error::boot_protocol 2 needs the maintainer's public trust in keys/os-release/$EPILYKOS_CHANNEL/ (keys/os-release/README.md)"
+            exit 1
           fi
+          echo "EPILYKOS_TRUST_DIR=$PWD/keys/os-release/$EPILYKOS_CHANNEL" >> "$GITHUB_ENV"
+          echo "TRUST_LABEL=maintainer-trust" >> "$GITHUB_ENV"
 
       - name: Build
         id: build
@@ -384,34 +356,6 @@ jobs:
 
           echo "IMAGES_DIR=$IMAGES_DIR" >> "$GITHUB_ENV"
 
-      # A protocol-2 test card also gets a signed OS update package made from
-      # this build's own rootfs (the bytes in ROOT-A/ROOT-B), with the same
-      # TEST-ONLY trust, for installing on a spare card. Verified as a box
-      # would before upload. Maintainer-signed packages are the release job's.
-      - name: OS update package (protocol 2, test trust)
-        id: os-package
-        if: env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'test-trust'
-        run: |
-          set -e
-          IMAGES_DIR=$(dirname "$(find os/build -path '*/output/images/sdcard.img' -print -quit)")
-          HOST_BIN=$(dirname "$IMAGES_DIR")/host/bin
-          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          PATH="$HOST_BIN:$PATH" python3 tools/build_os_bundle.py --rauc "$HOST_BIN/rauc" \
-            --rootfs "$IMAGES_DIR/rootfs.ext4" --output "$RUNNER_TEMP/os-package" \
-            --cert "$EPILYKOS_TRUST_DIR/rauc-signing.pem" --key "$EPILYKOS_TRUST_DIR/private/rauc-signing.key" \
-            --index-key "$EPILYKOS_TRUST_DIR/private/$EPILYKOS_CHANNEL-test-1.key" \
-            --index-key-id "$EPILYKOS_CHANNEL-test-1" --trust "$EPILYKOS_TRUST_DIR" \
-            --url-base "$RUN_URL" --notes-url "$RUN_URL" | tee os-package.json
-          { echo '### OS update package (TEST-ONLY trust)'; echo; echo '```json'; cat os-package.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        if: steps.os-package.outcome == 'success'
-        with:
-          name: epilykos-${{ env.BOARD }}-protocol2-test-package
-          path: ${{ runner.temp }}/os-package
-          retention-days: 14
-          if-no-files-found: error
-
       # Uploaded whenever the build itself succeeded, even if a structural
       # check above failed, so a two-hour build is never thrown away; the
       # job still fails in that case.
@@ -431,16 +375,6 @@ jobs:
           # A protocol-2 card says so, and which trust it carries.
           name: epilykos-${{ env.BOARD }}${{ env.EPILYKOS_BOOT_PROTOCOL == '2' && format('-protocol2-{0}', env.TRUST_LABEL) || '' }}-sdcard
           path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
-          retention-days: 14
-          if-no-files-found: error
-
-      # The TEST-ONLY keys such a card trusts, to sign test packages for it on
-      # a spare card. Never the maintainer's offline roots.
-      - uses: actions/upload-artifact@v4
-        if: always() && steps.build.outcome == 'success' && env.TRUST_LABEL == 'test-trust'
-        with:
-          name: epilykos-${{ env.BOARD }}-protocol2-test-trust
-          path: ${{ env.EPILYKOS_TRUST_DIR }}
           retention-days: 14
           if-no-files-found: error
 
@@ -583,70 +517,6 @@ jobs:
           gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-pointer"
           python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/pointer" --downloaded "$RUNNER_TEMP/back-pointer"
           { echo "### OS update package published"; echo; echo '```json'; cat assets.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-  # Spare-card acceptance (design §12): make a TEST-ONLY package reachable by
-  # the test card it was built for. The entry is re-signed with that run's
-  # own TEST-ONLY delegated key for the URL of the test release; the dev
-  # pointer then names it. Only on an explicit request; never maintainer
-  # trust or the signing environments. A real dev publication replaces it.
-  test-package-publish:
-    needs: validate
-    if: github.event.inputs.publish_test_package_from_run != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
-    env:
-      RUN: ${{ github.event.inputs.publish_test_package_from_run }}
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
-        with:
-          name: epilykos-${{ env.BOARD }}-protocol2-test-package
-          run-id: ${{ github.event.inputs.publish_test_package_from_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/package
-      - uses: actions/download-artifact@v4
-        with:
-          name: epilykos-${{ env.BOARD }}-protocol2-test-trust
-          run-id: ${{ github.event.inputs.publish_test_package_from_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/trust
-      - name: Re-sign the entry for its test release
-        run: |
-          set -e
-          case "$RUN" in ''|*[!0-9]*) echo "::error::publish_test_package_from_run must be a run ID"; exit 1 ;; esac
-          test -f "$RUNNER_TEMP/trust/TEST-ONLY.txt"
-          chmod 600 "$RUNNER_TEMP"/trust/private/*
-          CHANNEL=$(python3 -c 'import json,glob,sys; print(json.load(open(glob.glob(sys.argv[1])[0]))["channel"])' "$RUNNER_TEMP/package/*.entry.json")
-          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
-          echo "TAG=os-$CHANNEL-test-$RUN" >> "$GITHUB_ENV"
-          python3 tools/os_release.py test-entry --package "$RUNNER_TEMP/package" --trust "$RUNNER_TEMP/trust" \
-            --repository "$GITHUB_REPOSITORY" --tag "os-$CHANNEL-test-$RUN"
-          python3 tools/os_release.py assets --package "$RUNNER_TEMP/package" --trust "$RUNNER_TEMP/trust" \
-            --channel "$CHANNEL" --output "$RUNNER_TEMP/assets" --tag "os-$CHANNEL-test-$RUN" | tee assets.json
-      - name: Upload the package release
-        run: |
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
-            --title "TEST-ONLY OS update package (run $RUN)" \
-            --notes "TEST-ONLY trust from run $RUN, for the spare-card acceptance. Never install on the working box." \
-            "$RUNNER_TEMP"/assets/package/*
-      - name: Read the package back
-        run: |
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-package"
-          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/package" --downloaded "$RUNNER_TEMP/back-package"
-      - name: Move the channel pointer
-        run: |
-          gh release view "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
-              --title "EpilykosOS update pointer ($CHANNEL)" --notes "The newest OS update package for the $CHANNEL channel."
-          gh release upload "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP"/assets/pointer/*
-      - name: Read the pointer back
-        run: |
-          gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-pointer"
-          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/pointer" --downloaded "$RUNNER_TEMP/back-pointer"
-          { echo "### TEST-ONLY OS update published"; echo; echo '```json'; cat assets.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   pipeline-policy:
     needs: [validate, build]

@@ -25,7 +25,7 @@ keys/os-release/<channel>/        dev or stable
   os-policy.sig                   64-byte Ed25519 signature by the root
 ```
 
-The image build reads this directory when it exists (`os/board/epilykos/raspberrypi3/post-image.sh`). It seeds the policy into both environment copies and puts the root on BOOT. Without it, protocol-2 builds use throwaway TEST-ONLY trust (`tools/os_test_trust.py`), and those images are never published.
+The image build reads this directory when it exists (`os/board/epilykos/raspberrypi3/post-image.sh`). It seeds the policy into both environment copies and puts the root on BOOT. Without it, protocol-2 builds refuse to run. (`tools/os_test_trust.py` makes throwaway trust for the repository's own tests only.)
 
 ## Once, offline: create the roots
 

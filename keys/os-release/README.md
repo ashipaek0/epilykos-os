@@ -68,21 +68,19 @@ Back up the three roots offline, in two places. Losing the index root means ever
    openssl x509 -in stable-rauc-1.pem -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum   # leaf SPKI
    ```
 
-3. **Write the policy** as canonical JSON. Use sorted keys, no spaces and ASCII only; `tools/os_test_trust.py` shows the exact shape. Then sign it with the root:
-
-   ```json
-   {"board":"raspberrypi3","channel":"stable","index_keys":[{"key_id":"stable-index-1","public_key":"…"}],
-    "rauc_cas":["-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----\n"],
-    "rauc_leaf_spki_sha256":["…"],"schema":1,"trust_epoch":1}
-   ```
+3. **Write and sign the policy.** One command, run from a checkout of this repository on the offline computer, with the paths to the files from the steps above. It writes the exact bytes a box accepts, signs them with the offline root, and checks the result the way the image build does. Nothing is typed by hand.
 
    ```bash
-   openssl pkeyutl -sign -rawin -inkey os-index-root.key -in os-policy.json -out os-policy.sig
+   python3 tools/make_os_policy.py --channel stable \
+     --root-key os-index-root.key --root-pub os-index-root.pem \
+     --index-key stable-index-1.key --key-id stable-index-1 \
+     --ca os-release-ca.pem --leaf stable-rauc-1.pem \
+     --output keys/os-release/stable
    ```
 
-   The dev policy lists both CAs. The stable policy lists only the release CA. The policy must stay under 6 KiB, which the image build checks.
+   The dev policy lists both CAs: pass `--ca os-release-ca.pem --ca os-development-ca.pem` and the dev index key and leaf. The stable policy lists only the release CA. The script refuses a root key that doesn't match its public key, and a leaf that none of the given CAs issued. The policy must stay under 6 KiB, which the script and the image build check. It writes `os-index-root.pem`, `os-policy.json` and `os-policy.sig`, and refuses to overwrite an existing folder.
 
-4. **Commit** `os-index-root.pem`, `os-policy.json` and `os-policy.sig` under `keys/os-release/<channel>/`.
+4. **Commit** the three files in `keys/os-release/<channel>/` (public files only, never a `.key`).
 
 5. **Store the CI secrets** in a protected GitHub Actions environment for the channel: the delegated index key, the leaf key and the leaf certificate.
    - `os-stable` accepts only `main`; `os-dev` accepts only `dev`.

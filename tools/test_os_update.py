@@ -36,6 +36,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -656,6 +657,17 @@ class GuardTests(Base):
         osu.refuse_if('active', 'reconciling', action='A factory reset')     # allowed while ready
         osu.set_guard('idle')
         self.assertEqual(osu.blocking(), 'idle')
+
+    def test_protocol1_card_gets_an_idle_guard_at_boot(self):
+        """A protocol-1 card has no OS update jobs, but the app is still told
+        where the guard is and fails closed on a missing file, which held back
+        its retention, backup and integrity jobs for good."""
+        hostd = self.load_hostd()
+        (osu.PUBLIC / 'guard.json').unlink()
+        self.assertEqual(osu.guard()['state'], 'reconciling')
+        with unittest.mock.patch.object(osu, 'platform', lambda: None):
+            hostd.reconcile_os_update()
+        self.assertEqual(json.loads((osu.PUBLIC / 'guard.json').read_text())['state'], 'idle')
 
     def test_guard_is_public_and_job_state_private(self):
         self.admit()

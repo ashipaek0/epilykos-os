@@ -31,6 +31,7 @@ test:
 	$(PYTHON) tools/test_os_update.py
 	$(PYTHON) tools/test_os_reconcile.py
 	$(PYTHON) tools/test_os_release.py
+	$(PYTHON) tools/test_make_os_policy.py
 	$(PYTHON) tools/test_platform_env.py
 	$(PYTHON) tools/test_bootstrap_adoption.py
 	$(PYTHON) tools/test_os_slot_acceptance.py

@@ -92,3 +92,5 @@ jobs:
           python3 tools/test_wifi_provisioning.py
           python3 tools/test_improv_dbus.py
           python3 tools/test_host_actions.py
+      - name: DATA start-up ordering (first boot)
+        run: python3 tools/test_data_units.py

@@ -34,7 +34,7 @@ on:
         required: false
         default: ''
       boot_protocol:
-        description: 'Card protocol: auto (2 on main and for tagged releases, which can take OS updates; 1 elsewhere), or 1 / 2 by hand. Protocol 2 needs the maintainer trust in keys/os-release/<channel>/'
+        description: 'Card protocol: auto is 2, a card that takes OS updates (needs the maintainer trust in keys/os-release/<channel>/); pick 1 for a card without them'
         required: false
         default: auto
         type: choice
@@ -68,9 +68,9 @@ env:
   # run on dev or a feature branch) preloads the dev manifest unless the
   # run asks for stable.
   EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
-  # Protocol 2 (a card that takes OS updates) for main and tagged releases;
-  # protocol 1 for anything else unless asked for by hand; see os/build.sh.
-  EPILYKOS_BOOT_PROTOCOL: ${{ github.event.inputs.boot_protocol == '1' && '1' || github.event.inputs.boot_protocol == '2' && '2' || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && '2' || '1') }}
+  # Protocol 2, a card that takes OS updates, for every build, dev included,
+  # so what is tested is what ships; protocol 1 only when asked for by hand.
+  EPILYKOS_BOOT_PROTOCOL: ${{ github.event.inputs.boot_protocol == '1' && '1' || '2' }}
 
 jobs:
   validate:

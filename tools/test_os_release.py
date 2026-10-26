@@ -153,11 +153,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('os-index-root.key', text, 'no root private key in CI')
         self.assertIn('check-sequence', text)
 
-    def test_main_and_releases_build_protocol_2_by_default(self):
+    def test_every_build_is_protocol_2_unless_asked_otherwise(self):
         env = self.workflow['env']['EPILYKOS_BOOT_PROTOCOL']
-        self.assertIn("github.ref == 'refs/heads/main'", env)
-        self.assertIn("github.event_name == 'release'", env)
-        self.assertTrue(env.rstrip('} ').endswith("&& '2' || '1')"), 'anything else stays protocol 1')
+        self.assertEqual(env, "${{ github.event.inputs.boot_protocol == '1' && '1' || '2' }}")
         inputs = self.workflow[True]['workflow_dispatch']['inputs']['boot_protocol']
         self.assertEqual((inputs['default'], inputs['options']), ('auto', ['auto', '1', '2']))
         step = next(s for s in self.workflow['jobs']['build']['steps'] if s.get('name') == 'Protocol-2 inputs')

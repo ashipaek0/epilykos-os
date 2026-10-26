@@ -153,6 +153,25 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('os-index-root.key', text, 'no root private key in CI')
         self.assertIn('check-sequence', text)
 
+    def test_every_build_is_protocol_2_unless_asked_otherwise(self):
+        env = self.workflow['env']['EPILYKOS_BOOT_PROTOCOL']
+        self.assertEqual(env, "${{ github.event.inputs.boot_protocol == '1' && '1' || '2' }}")
+        inputs = self.workflow[True]['workflow_dispatch']['inputs']['boot_protocol']
+        self.assertEqual((inputs['default'], inputs['options']), ('auto', ['auto', '1', '2']))
+        step = next(s for s in self.workflow['jobs']['build']['steps'] if s.get('name') == 'Protocol-2 inputs')
+        self.assertIn("os_sequence || 'auto'", step['env']['OS_SEQUENCE'])
+
+    def test_a_protocol_2_image_is_released_only_after_its_package(self):
+        release = self.workflow['jobs']['release']
+        self.assertIn('os-package', release['needs'])
+        self.assertIn("needs.os-package.result == 'success'", release['if'])
+        policy = self.workflow['jobs']['pipeline-policy']['steps'][-1]['env']
+        self.assertEqual(policy['POLICY_OS_PUBLISH'], '${{ needs.build.outputs.os_publish }}')
+        names = {s['with']['name'] for j in self.workflow['jobs'].values() for s in j.get('steps', [])
+                 if s.get('uses', '').startswith('actions/upload-artifact') or s.get('uses', '').startswith('actions/download-artifact')}
+        self.assertIn('epilykos-${{ env.BOARD }}-sdcard', names)
+        self.assertFalse([n for n in names if 'protocol2-maintainer' in n or 'protocol2-test' in n])
+
     def test_no_test_only_publication_path(self):
         text = json.dumps(self.workflow)
         self.assertNotIn('test-package-publish', self.workflow['jobs'])

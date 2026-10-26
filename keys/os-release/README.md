@@ -89,6 +89,8 @@ Back up the three roots offline, in two places. Losing the index root means ever
 
 ## What CI publishes, and when
 
+Every build, `dev` included, is a protocol-2 card (it takes OS updates) unless you pick `boot_protocol` 1 by hand, so what is tested is what ships. A protocol-2 image is released as a GitHub release only after its own update package has been uploaded and read back, so a box flashed from it can always be updated.
+
 The `os-package` job in `.github/workflows/os-build.yml` signs and publishes a package for a protocol-2 build. It runs only when every one of these holds (`tools/os_release.py decide`):
 
 - the card was built with the committed maintainer trust for its channel;

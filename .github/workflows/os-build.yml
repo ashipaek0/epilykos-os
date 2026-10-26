@@ -34,13 +34,13 @@ on:
         required: false
         default: ''
       boot_protocol:
-        description: 'Card protocol: 1 (shipping) or 2 (OS updates; needs the maintainer trust in keys/os-release/<channel>/)'
+        description: 'Card protocol: auto is 2, a card that takes OS updates (needs the maintainer trust in keys/os-release/<channel>/); pick 1 for a card without them'
         required: false
-        default: '1'
+        default: auto
         type: choice
-        options: ['1', '2']
+        options: [auto, '1', '2']
       os_sequence:
-        description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor), or auto (one above the published channel pointer)'
+        description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor); empty or auto is one above the published channel pointer'
         required: false
         default: ''
   # A release you create on GitHub (Releases -> Draft a new release, tag
@@ -68,8 +68,9 @@ env:
   # run on dev or a feature branch) preloads the dev manifest unless the
   # run asks for stable.
   EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
-  # Protocol 2 (OS updates) only when asked for by hand; see os/build.sh.
-  EPILYKOS_BOOT_PROTOCOL: ${{ github.event.inputs.boot_protocol || '1' }}
+  # Protocol 2, a card that takes OS updates, for every build, dev included,
+  # so what is tested is what ships; protocol 1 only when asked for by hand.
+  EPILYKOS_BOOT_PROTOCOL: ${{ github.event.inputs.boot_protocol == '1' && '1' || '2' }}
 
 jobs:
   validate:
@@ -186,7 +187,7 @@ jobs:
         id: p2
         if: env.EPILYKOS_BOOT_PROTOCOL == '2'
         env:
-          OS_SEQUENCE: ${{ github.event.inputs.os_sequence }}
+          OS_SEQUENCE: ${{ github.event.inputs.os_sequence || 'auto' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$OS_SEQUENCE" = auto ]; then
@@ -372,8 +373,7 @@ jobs:
         id: image-artifact
         if: always() && steps.build.outcome == 'success'
         with:
-          # A protocol-2 card says so, and which trust it carries.
-          name: epilykos-${{ env.BOARD }}${{ env.EPILYKOS_BOOT_PROTOCOL == '2' && format('-protocol2-{0}', env.TRUST_LABEL) || '' }}-sdcard
+          name: epilykos-${{ env.BOARD }}-sdcard
           path: ${{ env.IMAGES_DIR }}/sdcard.img.zst
           retention-days: 14
           if-no-files-found: error
@@ -541,6 +541,7 @@ jobs:
           POLICY_IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
           POLICY_IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
           POLICY_BOOT_PROTOCOL: ${{ env.EPILYKOS_BOOT_PROTOCOL }}
+          POLICY_OS_PUBLISH: ${{ needs.build.outputs.os_publish }}
         run: |
           python3 tools/image_release_policy.py | tee pipeline-policy.json
           echo '### OS publication / diagnostic policy' >> "$GITHUB_STEP_SUMMARY"
@@ -668,9 +669,11 @@ jobs:
   # Imager can offer EpilykosOS with its Wi-Fi settings. The list of the
   # newest release always has the same address:
   #   https://github.com/<owner>/<repo>/releases/latest/download/epilykos-os-imager.json
+  # A protocol-2 image is released only after its own update package was
+  # uploaded and read back, so a box flashed from it can always be updated.
   release:
-    needs: [build, pipeline-policy]
-    if: ${{ !cancelled() && needs.pipeline-policy.outputs.publish == 'true' }}
+    needs: [build, pipeline-policy, os-package]
+    if: ${{ !cancelled() && needs.pipeline-policy.outputs.publish == 'true' && (needs.build.outputs.os_publish != 'true' || needs.os-package.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

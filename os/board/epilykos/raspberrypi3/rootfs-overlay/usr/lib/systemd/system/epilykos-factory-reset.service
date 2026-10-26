@@ -1,14 +1,16 @@
 [Unit]
 Description=EpilykosOS: factory reset, when factory-reset.txt on BOOT asks for it
 Documentation=file:///usr/lib/epilykos/python/epilykos_reset.py
-# Before /data is mounted, like epilykos-data-grow (and after it, so the
-# new filesystem fills the grown partition). BOOT holds the request, so it
+# Before /data is checked and mounted, like epilykos-data-grow (and after
+# it, so the new filesystem fills the grown partition). Writing the new
+# filesystem makes udev announce the device again, which must not happen
+# while the check or the mount depends on it. BOOT holds the request, so it
 # is mounted first; without BOOT there is no request and nothing happens.
 DefaultDependencies=no
 Requires=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device
 Wants=boot.mount
 After=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device boot.mount epilykos-data-grow.service
-Before=data.mount shutdown.target
+Before=systemd-fsck@dev-disk-by\x2dpartuuid-45504c4b\x2d04.service data.mount shutdown.target
 Conflicts=shutdown.target
 ConditionPathExists=/boot/factory-reset.txt
 

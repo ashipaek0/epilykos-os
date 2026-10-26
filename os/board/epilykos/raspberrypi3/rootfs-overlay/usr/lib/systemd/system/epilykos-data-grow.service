@@ -1,11 +1,20 @@
 [Unit]
 Description=EpilykosOS: grow the DATA partition to fill the SD card
-# Before /data is mounted: see epilykos-data-grow. If growing fails, DATA
-# still mounts at its old size and the next boot tries again.
+# Before /data is mounted, and before DATA's file system check: see
+# epilykos-data-grow. If growing fails, DATA still mounts at its old size
+# and the next boot tries again.
+#
+# Rewriting the partition table makes the kernel and udev announce the
+# partition again, and for a moment its device unit goes away. The check
+# (systemd-fsck@) is bound to that device and /data's mount requires the
+# check, so a check that had already finished was stopped by the blink and
+# took the queued mount with it: /data stayed unmounted, and so did
+# everything that needs it, until boot health restarted the box. Growing
+# first, and settling the device, means nothing depends on it yet.
 DefaultDependencies=no
 Requires=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device
-After=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device systemd-fsck@dev-disk-by\x2dpartuuid-45504c4b\x2d04.service
-Before=data.mount shutdown.target
+After=dev-disk-by\x2dpartuuid-45504c4b\x2d04.device
+Before=systemd-fsck@dev-disk-by\x2dpartuuid-45504c4b\x2d04.service data.mount shutdown.target
 Conflicts=shutdown.target
 
 [Service]

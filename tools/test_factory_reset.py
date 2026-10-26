@@ -153,7 +153,8 @@ with tempfile.TemporaryDirectory() as d:
 
     src = BOOT_STEP.read_text()
     unit = (OVERLAY / 'usr/lib/systemd/system/epilykos-factory-reset.service').read_text()
-    assert 'Before=data.mount' in unit and 'After=' in unit and 'epilykos-data-grow.service' in unit
+    before = next(l for l in unit.splitlines() if l.startswith('Before='))
+    assert 'data.mount' in before.split() and 'After=' in unit and 'epilykos-data-grow.service' in unit
     assert 'ConditionPathExists=/boot/factory-reset.txt' in unit
     preset = (OVERLAY / 'usr/lib/systemd/system-preset/50-epilykos.preset').read_text()
     assert 'enable epilykos-factory-reset.service' in preset

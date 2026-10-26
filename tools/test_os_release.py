@@ -172,6 +172,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('epilykos-${{ env.BOARD }}-sdcard', names)
         self.assertFalse([n for n in names if 'protocol2-maintainer' in n or 'protocol2-test' in n])
 
+    def test_the_rootfs_is_compressed_through_its_symlink(self):
+        """Buildroot's rootfs.ext4 is a symlink and zstd ignores symlinks (run 54)."""
+        step = next(s for s in self.workflow['jobs']['build']['steps'] if s.get('name') == 'OS package rootfs')
+        self.assertIn('readlink -f "$IMAGES_DIR/rootfs.ext4"', step['run'])
+
     def test_no_test_only_publication_path(self):
         text = json.dumps(self.workflow)
         self.assertNotIn('test-package-publish', self.workflow['jobs'])

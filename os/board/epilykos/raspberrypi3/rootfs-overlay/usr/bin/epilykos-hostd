@@ -284,6 +284,22 @@ def notify_ready():
         s.sendto(b'READY=1', addr)
 
 
+def reconcile_os_update():
+    """Before the app: the OS update guard it reads reflects the job, and an
+    interrupted OS update job resumes or is reconciled. A protocol-1 card has
+    no OS update jobs, but the app is still pointed at the guard file and
+    treats a missing one as an update being checked, so it gets an idle one."""
+    try:
+        if os_update.platform() is not None:
+            found = os_activate.reconcile_boot()
+            if found != 'none':
+                log(f'OS update after this boot: {found}')
+        else:
+            os_update.set_guard('idle')
+    except (OSError, os_update.OsUpdateError, os_trust.TrustError) as e:
+        log(f'OS update reconciliation: {e}')
+
+
 def main():
     os.makedirs(os.path.dirname(SOCKET), exist_ok=True)
     try:
@@ -302,15 +318,7 @@ def main():
         update.recover()
     except OSError as e:
         log(f'update recovery: {e}')
-    # Also before the app: the OS update guard it reads reflects the job,
-    # and an interrupted OS update job resumes or is reconciled.
-    try:
-        if os_update.platform() is not None:
-            found = os_activate.reconcile_boot()
-            if found != 'none':
-                log(f'OS update after this boot: {found}')
-    except (OSError, os_update.OsUpdateError, os_trust.TrustError) as e:
-        log(f'OS update reconciliation: {e}')
+    reconcile_os_update()
     def write_clock():
         try:
             system.write_clock()

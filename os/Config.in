@@ -1,4 +1,22 @@
 # No extra Buildroot packages of our own yet — Epilykos itself is consumed
 # as a preloaded OCI image (C-DATA-002), not built from source here.
-# This file exists so Buildroot's BR2_EXTERNAL machinery has something to
-# source; it stays empty until that changes.
+config BR2_EPILYKOS_NATIVE_ENV_GUARD
+	bool "Epilykos protocol-2 native environment guard (development)"
+	depends on BR2_TARGET_UBOOT && BR2_PACKAGE_UBOOT_TOOLS_FWPRINTENV
+	help
+	  Enable the same strict native-state guard in U-Boot and fw-tools.
+	  Requires the protocol-2 bootstrap records and checked boot script.
+	  Leave disabled for existing protocol-1 images. OS update admission
+	  must not be enabled until the remaining bootstrap work is complete.
+
+config BR2_EPILYKOS_BOOT_PROTOCOL_2
+	bool "Epilykos protocol-2 slot boot (OS updates; development)"
+	depends on BR2_TARGET_UBOOT && BR2_PACKAGE_UBOOT_TOOLS_FWPRINTENV
+	select BR2_EPILYKOS_NATIVE_ENV_GUARD
+	help
+	  Build a protocol-2 card: each ROOT slot carries its own kernel,
+	  device tree and modules (/usr/lib/epilykos/boot), boot.scr is
+	  boot-slot.cmd, and both U-Boot environment copies are seeded with
+	  the root-signed trust policy and OS floor. Needs EPILYKOS_OS_SEQUENCE
+	  and EPILYKOS_TRUST_DIR at build time (os/build.sh). Development
+	  only until the hardware acceptance in plans/pending/os-dashboard-updates.md.

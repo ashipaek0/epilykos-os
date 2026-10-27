@@ -39,6 +39,17 @@ fi
 
 cd "${BR_DIR}"
 make BR2_EXTERNAL="${OS_DIR}" "epilykos_${BOARD}_defconfig"
+# EPILYKOS_BOOT_PROTOCOL=2 builds a protocol-2 card (OS updates; development):
+# the board's protocol2.config on top of its defconfig.
+case "${EPILYKOS_BOOT_PROTOCOL:-1}" in
+	1) ;;
+	2)
+		cat "${OS_DIR}/board/epilykos/${BOARD}/protocol2.config" >> .config
+		make BR2_EXTERNAL="${OS_DIR}" olddefconfig
+		grep -qx 'BR2_EPILYKOS_BOOT_PROTOCOL_2=y' .config || { echo "protocol 2 not enabled" >&2; exit 1; }
+		;;
+	*) echo "EPILYKOS_BOOT_PROTOCOL must be 1 or 2" >&2; exit 1 ;;
+esac
 make BR2_EXTERNAL="${OS_DIR}" -j"${MAKE_JOBS}"
 
 echo

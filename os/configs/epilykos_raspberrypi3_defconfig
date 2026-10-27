@@ -22,6 +22,11 @@ BR2_KERNEL_HEADERS_6_6=y
 
 # CI caches ~/.buildroot-ccache, Buildroot's default location.
 BR2_CCACHE=y
+# Patches per package: patches/<package>[/<version>]/*.patch (the kernel's
+# Bluetooth UART speed cap, the U-Boot/fw-tools state guard). Only this: a
+# package-specific patch setting (BR2_LINUX_KERNEL_PATCH) pointing at the
+# same files would apply them twice and stop the build.
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_EPILYKOS_PATH)/board/epilykos/raspberrypi3/patches"
 
 # -- Kernel: mainline kernel.org, the arm64 "defconfig" (covers the
 # BCM2837) plus a fragment that trims unrelated SoC platforms and pins

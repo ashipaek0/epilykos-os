@@ -1,0 +1,2 @@
+# Opt-in paired with guarded Linux fw-tools by os/external.mk.
+CONFIG_EPILYKOS_ENV_GUARD=y

@@ -33,6 +33,16 @@ on:
         description: 'Skip the build and boot-test the image from this earlier run id'
         required: false
         default: ''
+      boot_protocol:
+        description: 'Card protocol: auto is 2, a card that takes OS updates (needs the maintainer trust in keys/os-release/<channel>/); pick 1 for a card without them'
+        required: false
+        default: auto
+        type: choice
+        options: [auto, '1', '2']
+      os_sequence:
+        description: 'Protocol 2 only: this OS build''s sequence (positive integer, the seeded OS floor); empty or auto is one above the published channel pointer'
+        required: false
+        default: ''
   # A release you create on GitHub (Releases -> Draft a new release, tag
   # v1.0 on main) builds that version; later builds of main count on from it.
   release:
@@ -58,6 +68,9 @@ env:
   # run on dev or a feature branch) preloads the dev manifest unless the
   # run asks for stable.
   EPILYKOS_CHANNEL: ${{ github.event.inputs.channel || ((github.ref == 'refs/heads/main' || github.event_name == 'release') && 'stable' || 'dev') }}
+  # Protocol 2, a card that takes OS updates, for every build, dev included,
+  # so what is tested is what ships; protocol 1 only when asked for by hand.
+  EPILYKOS_BOOT_PROTOCOL: ${{ github.event.inputs.boot_protocol == '1' && '1' || '2' }}
 
 jobs:
   validate:
@@ -71,6 +84,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Protocol-2 card checks build real cards (tools/test_card_image.py).
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends genimage mtools dosfstools u-boot-tools e2fsprogs
       - run: pip install pyyaml==6.0.2 dbus-fast==4.0.4
       - name: Required host and contract regressions
         run: |
@@ -90,6 +105,8 @@ jobs:
     if: ${{ !github.event.inputs.image_from_run && !(github.event_name == 'release' && github.event.release.prerelease) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -97,6 +114,8 @@ jobs:
       channel: ${{ env.EPILYKOS_CHANNEL }}
       image_available: ${{ steps.image-artifact.outcome == 'success' }}
       image_sha256: ${{ steps.compress.outputs.image_sha256 }}
+      os_sequence: ${{ steps.p2.outputs.sequence }}
+      os_publish: ${{ steps.os-publish.outputs.os_publish }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -161,6 +180,39 @@ jobs:
             os-ccache-${{ runner.os }}-${{ env.BOARD }}-
             os-ccache-${{ runner.os }}-
 
+      # Protocol 2 needs the OS sequence and the maintainer's committed public
+      # trust (keys/os-release/<channel>/): a card seeded with anything else
+      # could never take a published update, so the build refuses.
+      - name: Protocol-2 inputs
+        id: p2
+        if: env.EPILYKOS_BOOT_PROTOCOL == '2'
+        env:
+          OS_SEQUENCE: ${{ github.event.inputs.os_sequence || 'auto' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$OS_SEQUENCE" = auto ]; then
+            # One above the channel's published pointer (or 1 for a new
+            # channel); os-package checks it again before publishing.
+            mkdir -p "$RUNNER_TEMP/pointer"
+            gh release download "os-$EPILYKOS_CHANNEL" --repo "$GITHUB_REPOSITORY" \
+              --pattern "os-index-$EPILYKOS_CHANNEL.json" --dir "$RUNNER_TEMP/pointer" 2>/dev/null || true
+            OS_SEQUENCE=$(python3 tools/os_release.py next-sequence --channel "$EPILYKOS_CHANNEL" \
+              --current "$RUNNER_TEMP/pointer/os-index-$EPILYKOS_CHANNEL.json" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["sequence"])')
+          fi
+          case "$OS_SEQUENCE" in
+            ''|0*|*[!0-9]*) echo "::error::boot_protocol 2 needs os_sequence (a positive integer or auto)"; exit 1 ;;
+          esac
+          echo "sequence=$OS_SEQUENCE" >> "$GITHUB_OUTPUT"
+          echo "EPILYKOS_OS_SEQUENCE=$OS_SEQUENCE" >> "$GITHUB_ENV"
+          echo "EPILYKOS_SOURCE_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
+          if [ ! -f "keys/os-release/$EPILYKOS_CHANNEL/os-policy.json" ]; then
+            echo "::error::boot_protocol 2 needs the maintainer's public trust in keys/os-release/$EPILYKOS_CHANNEL/ (keys/os-release/README.md)"
+            exit 1
+          fi
+          echo "EPILYKOS_TRUST_DIR=$PWD/keys/os-release/$EPILYKOS_CHANNEL" >> "$GITHUB_ENV"
+          echo "TRUST_LABEL=maintainer-trust" >> "$GITHUB_ENV"
+
       - name: Build
         id: build
         run: os/build.sh "${BOARD}"
@@ -200,16 +252,29 @@ jobs:
           e2label "$IMAGES_DIR/rootfs-b.ext4" | grep -qx ROOT-B || { echo "rootfs-b.ext4 not labelled ROOT-B"; exit 1; }
           e2label "$IMAGES_DIR/data.ext4" | grep -qx DATA || { echo "data.ext4 not labelled DATA"; exit 1; }
 
-          # The U-Boot environment area (4 MiB, two 16 KiB copies) must ship
-          # blank so U-Boot starts from its defaults, not a stale env.
-          test -z "$(dd if="$IMG" bs=16K skip=256 count=2 status=none | tr -d '\0' | head -c1)" \
-            || { echo "U-Boot environment area is not blank"; exit 1; }
-
-          # Everything the Pi firmware and U-Boot load from BOOT.
           BOOT_START=$(fdisk -o Device,Start -l "$IMG" | awk -v dev="${IMG}1" '$1==dev {print $2}')
-          for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
-            mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
-          done
+          if [ "$EPILYKOS_BOOT_PROTOCOL" = 2 ]; then
+            # Seeded environment, slot script, trust root on BOOT and each
+            # slot's own Linux (post-image.sh ran this too).
+            python3 tools/check_card_image.py --image "$IMG" \
+              --rootfs-a "$IMAGES_DIR/rootfs.ext4" --rootfs-b "$IMAGES_DIR/rootfs-b.ext4" \
+              --boot-script os/board/epilykos/raspberrypi3/boot-slot.cmd \
+              --seed "$IMAGES_DIR/protocol2-seed" | tee card-check.json
+            { echo '### Protocol-2 card check'; echo; echo '```json'; cat card-check.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr bcm2837-rpi-3-b.dtb os-index-root.pem wifi-example.txt; do
+              mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
+            done
+          else
+            # The U-Boot environment area (4 MiB, two 16 KiB copies) must ship
+            # blank so U-Boot starts from its defaults, not a stale env.
+            test -z "$(dd if="$IMG" bs=16K skip=256 count=2 status=none | tr -d '\0' | head -c1)" \
+              || { echo "U-Boot environment area is not blank"; exit 1; }
+
+            # Everything the Pi firmware and U-Boot load from BOOT.
+            for f in bootcode.bin start.elf fixup.dat config.txt u-boot.bin boot.scr Image bcm2837-rpi-3-b.dtb wifi-example.txt; do
+              mdir -i "${IMG}@@$((BOOT_START * 512))" "::$f" >/dev/null || { echo "BOOT is missing $f"; exit 1; }
+            done
+          fi
           mtype -i "${IMG}@@$((BOOT_START * 512))" ::config.txt | grep -qx 'arm_64bit=1' || { echo "config.txt is not 64-bit"; exit 1; }
 
           # 64-bit userland, and the application image actually preloaded.
@@ -222,6 +287,11 @@ jobs:
           # setup tools run on (with dbus-fast for Bluetooth).
           ls "$TARGET_DIR"/lib/firmware/brcm/brcmfmac43430-sdio*.bin >/dev/null || { echo "Wi-Fi firmware missing"; exit 1; }
           ls "$TARGET_DIR"/lib/firmware/brcm/BCM43430A1*.hcd >/dev/null || { echo "Bluetooth firmware missing"; exit 1; }
+          # Bluetooth UART speed cap (C-RUNTIME-003): the patched driver and its setting.
+          HCI_UART=$(find "$TARGET_DIR/lib/modules" -name 'hci_uart.ko*' | head -1)
+          test -n "$HCI_UART" || { echo "hci_uart module missing"; exit 1; }
+          modinfo -F parm "$HCI_UART" | grep -q '^max_speed:' || { echo "hci_uart has no max_speed option (kernel patch not applied)"; exit 1; }
+          grep -qx 'options hci_uart max_speed=921600' "$TARGET_DIR/etc/modprobe.d/epilykos-bluetooth.conf" || { echo "Bluetooth UART speed not set"; exit 1; }
           test -f "$TARGET_DIR/lib/firmware/regulatory.db" || { echo "wireless regulatory database missing"; exit 1; }
           ls -d "$TARGET_DIR"/usr/lib/python3*/site-packages/dbus_fast >/dev/null || { echo "dbus-fast missing"; exit 1; }
           test -x "$TARGET_DIR/usr/bin/iw" || { echo "iw missing"; exit 1; }
@@ -232,12 +302,23 @@ jobs:
           # not in output/target: read them from the image.
           enabled() { debugfs -R "ls /etc/systemd/system/$1" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null | tr -s ' ' '\n'; }
           WANTS=$(enabled multi-user.target.wants)
-          for u in epilykos.service epilykos-mark-good.service \
+          for u in epilykos.service \
                    systemd-networkd.service iwd.service epilykos-wifi-import.service \
                    epilykos-improv.service epilykos-machine-id.service \
                    epilykos-hostd.service epilykos-sshd.service; do
             echo "$WANTS" | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
+          # Slot confirmation: epilykos-mark-good on protocol 1; the every-boot
+          # supervisor (and never mark-good) on protocol 2.
+          if [ "$EPILYKOS_BOOT_PROTOCOL" = 2 ]; then
+            enabled sysinit.target.wants | grep -qx epilykos-boot-health.service || { echo "epilykos-boot-health.service is not enabled"; exit 1; }
+            if echo "$WANTS" | grep -qx epilykos-mark-good.service; then echo "protocol 2 must not enable epilykos-mark-good"; exit 1; fi
+            debugfs -R "cat /usr/lib/systemd/system.conf.d/50-epilykos-watchdog.conf" "$IMAGES_DIR/rootfs.ext4" 2>/dev/null \
+              | grep -qx 'RuntimeWatchdogSec=10s' || { echo "systemd watchdog not configured"; exit 1; }
+          else
+            echo "$WANTS" | grep -qx epilykos-mark-good.service || { echo "epilykos-mark-good.service is not enabled in rootfs.ext4"; exit 1; }
+            if enabled sysinit.target.wants | grep -qx epilykos-boot-health.service; then echo "protocol 1 must not enable epilykos-boot-health"; exit 1; fi
+          fi
           for u in epilykos-data-layout.service epilykos-data-grow.service epilykos-factory-reset.service; do
             enabled local-fs.target.wants | grep -qx "$u" || { echo "$u is not enabled in rootfs.ext4"; exit 1; }
           done
@@ -297,6 +378,38 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # A maintainer-trust protocol-2 build keeps the exact rootfs of its card
+      # slots, from which the protected os-package job makes the update.
+      - name: OS package rootfs
+        if: steps.build.outcome == 'success' && env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'maintainer-trust'
+        # rootfs.ext4 is a symlink to Buildroot's rootfs.ext2, which zstd refuses
+        # to read without following it by hand.
+        run: zstd -12 -T0 "$(readlink -f "$IMAGES_DIR/rootfs.ext4")" -o "$RUNNER_TEMP/rootfs.ext4.zst"
+      - uses: actions/upload-artifact@v4
+        id: rootfs-artifact
+        if: steps.build.outcome == 'success' && env.EPILYKOS_BOOT_PROTOCOL == '2' && env.TRUST_LABEL == 'maintainer-trust'
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-rootfs
+          path: ${{ runner.temp }}/rootfs.ext4.zst
+          retention-days: 14
+          if-no-files-found: error
+      - name: OS package publication gate
+        id: os-publish
+        if: always()
+        env:
+          SOURCE_ON_MAIN: ${{ needs.validate.outputs.source_on_main }}
+          BUILD: ${{ steps.build.outcome }}
+          ROOTFS: ${{ steps.rootfs-artifact.outcome == 'success' }}
+          SEQUENCE: ${{ steps.p2.outputs.sequence }}
+          PUBLISH_ENABLED: ${{ vars.EPILYKOS_OS_PUBLISH }}
+          IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
+        run: |
+          python3 tools/os_release.py decide --channel "$EPILYKOS_CHANNEL" --ref "$GITHUB_REF" \
+            --event "$GITHUB_EVENT_NAME" --source-on-main "$SOURCE_ON_MAIN" --boot-protocol "$EPILYKOS_BOOT_PROTOCOL" \
+            --trust-label "${TRUST_LABEL:-}" --build "$BUILD" --rootfs-uploaded "$ROOTFS" --sequence "$SEQUENCE" \
+            --publication-enabled "$PUBLISH_ENABLED" --image-from-run "$IMAGE_FROM_RUN" \
+            --github-output "$GITHUB_OUTPUT" | tee os-publish.json
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -306,6 +419,106 @@ jobs:
             os/build/buildroot-*/.config
           retention-days: 14
           if-no-files-found: ignore
+
+  # Signs and publishes the OS update package of a maintainer-trust
+  # protocol-2 build: the same rootfs as the card, delegated keys from the
+  # channel's protected environment (os-stable accepts main, os-dev accepts
+  # dev), never the offline roots. The immutable package release first, read
+  # back unchanged; the channel pointer moves last. One at a time per channel.
+  os-package:
+    needs: [validate, build]
+    if: needs.build.outputs.os_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: os-${{ needs.build.outputs.channel }}
+    permissions:
+      contents: write
+    concurrency:
+      group: os-publish-${{ needs.build.outputs.channel }}
+      cancel-in-progress: false
+    env:
+      CHANNEL: ${{ needs.build.outputs.channel }}
+      SEQUENCE: ${{ needs.build.outputs.os_sequence }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends meson ninja-build pkg-config libglib2.0-dev libssl-dev \
+            squashfs-tools e2fsprogs zstd
+      - uses: actions/download-artifact@v4
+        with:
+          name: epilykos-${{ env.BOARD }}-protocol2-rootfs
+          path: ${{ runner.temp }}/rootfs
+      - name: Host RAUC 1.15.2
+        run: |
+          git clone -q --depth 1 --branch v1.15.2 https://github.com/rauc/rauc.git "$RUNNER_TEMP/rauc-src"
+          meson setup "$RUNNER_TEMP/rauc-build" "$RUNNER_TEMP/rauc-src" -Dservice=false -Dnetwork=false \
+            -Dstreaming=false -Djson=disabled -Dgpt=disabled -Dtests=false
+          meson compile -C "$RUNNER_TEMP/rauc-build"
+          "$RUNNER_TEMP/rauc-build/rauc" --version | grep -qx 'rauc v1.15.2'
+      - name: Sequence is still unused
+        run: |
+          mkdir -p "$RUNNER_TEMP/pointer"
+          gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --pattern "os-index-$CHANNEL.json" \
+            --dir "$RUNNER_TEMP/pointer" 2>/dev/null || true
+          python3 tools/os_release.py check-sequence --channel "$CHANNEL" --sequence "$SEQUENCE" \
+            --current "$RUNNER_TEMP/pointer/os-index-$CHANNEL.json"
+          if gh release view "os-$CHANNEL-$SEQUENCE" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::os-$CHANNEL-$SEQUENCE already exists; a sequence is never reused"; exit 1
+          fi
+      - name: Package from the build's rootfs
+        env:
+          OS_INDEX_KEY: ${{ secrets.OS_INDEX_KEY }}
+          OS_INDEX_KEY_ID: ${{ vars.OS_INDEX_KEY_ID }}
+          OS_RAUC_KEY: ${{ secrets.OS_RAUC_KEY }}
+          OS_RAUC_CERT: ${{ vars.OS_RAUC_CERT }}
+        run: |
+          set -e
+          umask 077
+          keys="$RUNNER_TEMP/keys"; mkdir -p "$keys"
+          for v in OS_INDEX_KEY OS_INDEX_KEY_ID OS_RAUC_KEY OS_RAUC_CERT; do
+            [ -n "${!v}" ] || { echo "::error::$v is not configured in the os-$CHANNEL environment"; exit 1; }
+          done
+          printf '%s\n' "$OS_INDEX_KEY" > "$keys/index.key"
+          printf '%s\n' "$OS_RAUC_KEY" > "$keys/rauc.key"
+          printf '%s\n' "$OS_RAUC_CERT" > "$keys/rauc.pem"
+          zstd -d -q "$RUNNER_TEMP/rootfs/rootfs.ext4.zst" -o "$RUNNER_TEMP/rootfs.ext4"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/os-$CHANNEL-$SEQUENCE"
+          python3 tools/build_os_bundle.py --rauc "$RUNNER_TEMP/rauc-build/rauc" --rootfs "$RUNNER_TEMP/rootfs.ext4" \
+            --output "$RUNNER_TEMP/package" --cert "$keys/rauc.pem" --key "$keys/rauc.key" \
+            --index-key "$keys/index.key" --index-key-id "$OS_INDEX_KEY_ID" --trust "keys/os-release/$CHANNEL" \
+            --url-base "$base" --notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/os-$CHANNEL-$SEQUENCE"
+          rm -rf "$keys"
+          python3 tools/os_release.py assets --package "$RUNNER_TEMP/package" --trust "keys/os-release/$CHANNEL" \
+            --channel "$CHANNEL" --output "$RUNNER_TEMP/assets" | tee assets.json
+      - name: Upload the package release
+        run: |
+          gh release create "os-$CHANNEL-$SEQUENCE" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "EpilykosOS update package ($CHANNEL, sequence $SEQUENCE)" --prerelease \
+            --notes "Signed OS update package for Settings > Updates. Installed by the box, not flashed." \
+            "$RUNNER_TEMP"/assets/package/*
+      - name: Read the package back
+        run: |
+          gh release download "os-$CHANNEL-$SEQUENCE" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-package"
+          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/package" --downloaded "$RUNNER_TEMP/back-package"
+          python3 tools/verify_os_release.py --root "keys/os-release/$CHANNEL/os-index-root.pem" \
+            --policy "keys/os-release/$CHANNEL/os-policy.json" --policy-sig "keys/os-release/$CHANNEL/os-policy.sig" \
+            --entry "$RUNNER_TEMP"/back-package/*.entry.json --entry-sig "$RUNNER_TEMP"/back-package/*.entry.sig \
+            --platform <(debugfs -R 'cat /usr/lib/epilykos/platform.json' "$RUNNER_TEMP/rootfs.ext4" 2>/dev/null) \
+            --bundle "$RUNNER_TEMP"/back-package/*.raucb
+      - name: Move the channel pointer
+        run: |
+          gh release view "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "EpilykosOS update pointer ($CHANNEL)" --notes "The newest OS update package for the $CHANNEL channel."
+          gh release upload "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP"/assets/pointer/*
+      - name: Read the pointer back
+        run: |
+          gh release download "os-$CHANNEL" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back-pointer"
+          python3 tools/os_release.py compare --expected "$RUNNER_TEMP/assets/pointer" --downloaded "$RUNNER_TEMP/back-pointer"
+          { echo "### OS update package published"; echo; echo '```json'; cat assets.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   pipeline-policy:
     needs: [validate, build]
@@ -329,6 +542,8 @@ jobs:
           POLICY_SOURCE_ON_MAIN: ${{ needs.validate.outputs.source_on_main }}
           POLICY_IMAGE_FROM_RUN: ${{ github.event.inputs.image_from_run }}
           POLICY_IMAGE_SHA256: ${{ needs.build.outputs.image_sha256 }}
+          POLICY_BOOT_PROTOCOL: ${{ env.EPILYKOS_BOOT_PROTOCOL }}
+          POLICY_OS_PUBLISH: ${{ needs.build.outputs.os_publish }}
         run: |
           python3 tools/image_release_policy.py | tee pipeline-policy.json
           echo '### OS publication / diagnostic policy' >> "$GITHUB_STEP_SUMMARY"
@@ -456,9 +671,11 @@ jobs:
   # Imager can offer EpilykosOS with its Wi-Fi settings. The list of the
   # newest release always has the same address:
   #   https://github.com/<owner>/<repo>/releases/latest/download/epilykos-os-imager.json
+  # A protocol-2 image is released only after its own update package was
+  # uploaded and read back, so a box flashed from it can always be updated.
   release:
-    needs: [build, pipeline-policy]
-    if: ${{ !cancelled() && needs.pipeline-policy.outputs.publish == 'true' }}
+    needs: [build, pipeline-policy, os-package]
+    if: ${{ !cancelled() && needs.pipeline-policy.outputs.publish == 'true' && (needs.build.outputs.os_publish != 'true' || needs.os-package.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

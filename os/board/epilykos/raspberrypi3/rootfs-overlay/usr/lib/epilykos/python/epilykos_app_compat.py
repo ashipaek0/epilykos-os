@@ -6,6 +6,13 @@ LABEL = 'io.epilykos.maintenance-lock'
 PROTOCOL = 'flock-v1'
 LOCK_ENV = 'EPILYKOS_MAINTENANCE_LOCK=/app/data/.maintenance.lock'
 IMAGE_ID = re.compile(r'^[0-9a-f]{64}$')
+# OS updates (design §7.4): the app reads the host's guard from a read-only
+# directory mount and refuses conflicting maintenance while it is not idle.
+GUARD_LABEL = 'io.epilykos.os-update-guard'
+GUARD_PROTOCOL = 'guard-v1'
+GUARD_ENV = 'EPILYKOS_OS_UPDATE_GUARD=/run/epilykos-os-updater/guard.json'
+GUARD_SOURCE = '/data/epilykos/os-updater/public'
+GUARD_DESTINATION = '/run/epilykos-os-updater'
 
 
 class CompatibilityError(ValueError):
@@ -65,3 +72,21 @@ def running_container(info):
     if len(data) != 1 or data[0].get('Type') != 'bind' or data[0].get('Source') != '/data/epilykos/app-data' \
             or data[0].get('RW') is not True or shadowed:
         raise CompatibilityError('The running app DATA mount cannot share the host maintenance lock')
+
+
+def os_update_guard(info):
+    """The running app cooperates with OS updates: flock-v1 as above, plus
+    guard-v1 with the guard directory mounted read-only. Without it Settings
+    does not offer OS installation."""
+    running_container(info)
+    config = info.get('Config') or {}
+    if config.get('Labels', {}).get(GUARD_LABEL) != GUARD_PROTOCOL:
+        raise CompatibilityError('This app version cannot take part in OS updates; update the app first')
+    env = config.get('Env') if isinstance(config.get('Env'), list) else []
+    if [value for value in env if isinstance(value, str) and value.startswith('EPILYKOS_OS_UPDATE_GUARD=')] != [GUARD_ENV]:
+        raise CompatibilityError('The running app is not configured for OS updates; restart it on this OS')
+    mounts = [mount for mount in info.get('Mounts') or [] if isinstance(mount, dict)
+              and mount.get('Destination') == GUARD_DESTINATION]
+    if len(mounts) != 1 or mounts[0].get('Type') != 'bind' or mounts[0].get('Source') != GUARD_SOURCE \
+            or mounts[0].get('RW') is not False:
+        raise CompatibilityError('The running app cannot see the OS update state; restart it on this OS')

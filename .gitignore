@@ -5,6 +5,7 @@ __pycache__/
 *.key
 *.pem
 !**/public/*.pem
+!keys/os-release/*/os-index-root.pem
 
 # Buildroot working tree (fetched by os/build.sh, not vendored)
 /os/build/

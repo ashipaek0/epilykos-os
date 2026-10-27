@@ -26,9 +26,20 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "bluetooth_pair", "address": "AA:BB:CC:DD:EE:FF"}
     {"action": "bluetooth_reply", "id": "...", "value": "1234"}   PIN, passkey or true
     {"action": "bluetooth_remove", "address": "AA:BB:CC:DD:EE:FF"}
+    {"action": "bluetooth_recover", "reason": "in_progress"}   restart a stuck BlueZ
+                                                (or "no_adapter"); at most once per 10 min
     {"action": "update_status"}                 installing? how did the last update end?
     {"action": "update_check"}                  is a newer signed app release out?
     {"action": "update_apply", "target": "app"} install it (replies at once, then works)
+    {"action": "os_status"}                     protocol-2 OS updates: state and job
+    {"action": "os_check"}                      is a newer signed OS package out? can it install?
+    {"action": "os_install", "sequence": 12, "sha256": "...", "request_id": "..."}
+                                                install exactly the checked package (idempotent
+                                                by request ID; replies at once, a worker installs)
+    {"action": "os_cancel", "job": "..."}       until installing starts
+    {"action": "os_restart", "job": "..."}      a ready job: activate the new slot once and restart
+    {"action": "os_discard", "job": "..."}      a ready job: keep the running system, drop the new one
+    {"action": "os_dismiss", "job": "..."}      forget a finished job's result
 
 Replies are {"ok": true, ...} or {"ok": false, "error": "..."}. Only these
 actions exist; nothing else on the host can be reached through it. The
@@ -46,9 +57,13 @@ import time
 sys.path.insert(0, '/usr/lib/epilykos/python')
 import epilykos_bluetooth as bluetooth  # noqa: E402
 import epilykos_netinfo as netinfo  # noqa: E402
+import epilykos_os_activate as os_activate  # noqa: E402
+import epilykos_os_trust as os_trust  # noqa: E402
+import epilykos_os_update as os_update  # noqa: E402
 import epilykos_port as port  # noqa: E402
 import epilykos_reset as reset  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
+import epilykos_storage as storage  # noqa: E402
 import epilykos_system as system  # noqa: E402
 import epilykos_update as update  # noqa: E402
 import epilykos_wifi as wifi  # noqa: E402
@@ -106,6 +121,8 @@ def network_status():
 
 def handle(req):
     action = req.get('action')
+    if action == 'bluetooth_recover':
+        return bluetooth.recover(req.get('reason'))
     if action in BLUETOOTH_ACTIONS:
         return bluetooth.action(action, req)
     if action == 'status':
@@ -127,6 +144,32 @@ def handle(req):
             if req.get('restart', True):
                 later(lambda: systemctl('restart', 'epilykos.service'), delay=3)
         return {'ok': True, 'timezone': zone, 'restart_required': changed}
+    if action == 'os_status':
+        return os_update.status()
+    if action == 'os_check':
+        return os_update.check()
+    if action == 'os_install':
+        log('OS update requested from Epilykos settings')
+        return os_update.install(req.get('sequence'), req.get('sha256'), req.get('request_id'))
+    if action == 'os_cancel':
+        return os_update.cancel(str(req.get('job', '')))
+    if action == 'os_dismiss':
+        return os_update.dismiss(str(req.get('job', '')))
+    if action == 'os_restart':
+        log('restart to finish the OS update requested from Epilykos settings')
+        return os_activate.restart(str(req.get('job', '')))
+    if action == 'os_discard':
+        log('OS update discarded from Epilykos settings')
+        return os_activate.discard(str(req.get('job', '')))
+    # Maintenance that conflicts with an OS update job (design §7.4).
+    if action in ('restart', 'shutdown'):
+        os_update.refuse_reboot()
+    if action == 'factory_reset':
+        os_update.refuse_if('active', 'reconciling', action='A factory reset')
+    if action == 'set_port' or (action == 'set_timezone' and req.get('restart', True)):
+        os_update.refuse_if('active', 'reconciling', action='Restarting the app')
+    if action == 'update_apply':
+        os_update.refuse_if('active', 'pending', 'reconciling', action='An app update')
     if action == 'set_clock':
         return {'ok': True, 'clock': system.set_clock(req.get('epoch'))}
     if action == 'restart':
@@ -189,9 +232,9 @@ def handle(req):
         later(lambda: systemctl('restart', 'epilykos.service'))
         return {'ok': True, 'port': new}
     if action == 'update_status':
-        return update.status()
+        return dict(update.status(), os=os_update.view())
     if action == 'update_check':
-        return update.check()
+        return dict(update.check(), os=os_update.view())
     if action == 'update_apply':
         target = str(req.get('target', 'app'))
         log(f'{target} update requested from Epilykos settings')
@@ -212,7 +255,8 @@ class Handler(socketserver.StreamRequestHandler):
                 if not isinstance(req, dict):
                     raise ValueError('not an object')
                 reply = handle(req)
-            except (ssh.SshError, port.PortError, update.UpdateError, system.SystemError, bluetooth.PairingError, reset.ResetError) as e:
+            except (ssh.SshError, port.PortError, update.UpdateError, system.SystemError, bluetooth.PairingError,
+                    reset.ResetError, os_update.OsUpdateError, os_trust.TrustError, storage.StorageError) as e:
                 reply = {'ok': False, 'error': str(e)}
             except (ValueError, UnicodeError):
                 reply = {'ok': False, 'error': 'malformed request'}
@@ -240,6 +284,22 @@ def notify_ready():
         s.sendto(b'READY=1', addr)
 
 
+def reconcile_os_update():
+    """Before the app: the OS update guard it reads reflects the job, and an
+    interrupted OS update job resumes or is reconciled. A protocol-1 card has
+    no OS update jobs, but the app is still pointed at the guard file and
+    treats a missing one as an update being checked, so it gets an idle one."""
+    try:
+        if os_update.platform() is not None:
+            found = os_activate.reconcile_boot()
+            if found != 'none':
+                log(f'OS update after this boot: {found}')
+        else:
+            os_update.set_guard('idle')
+    except (OSError, os_update.OsUpdateError, os_trust.TrustError) as e:
+        log(f'OS update reconciliation: {e}')
+
+
 def main():
     os.makedirs(os.path.dirname(SOCKET), exist_ok=True)
     try:
@@ -258,6 +318,7 @@ def main():
         update.recover()
     except OSError as e:
         log(f'update recovery: {e}')
+    reconcile_os_update()
     def write_clock():
         try:
             system.write_clock()

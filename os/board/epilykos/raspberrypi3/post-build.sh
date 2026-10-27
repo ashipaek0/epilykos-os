@@ -146,3 +146,43 @@ else
 	rm -f "${APP_DIR}/app-manifest.pub"
 	echo "post-build: no keys/app-manifest.pub; app updates from settings are off in this image"
 fi
+
+# -- Protocol 2: this slot's own Linux (OS updates; development) --
+# Each ROOT carries the kernel, DTB and modules of this one build
+# (/usr/lib/epilykos/boot, platform.json): U-Boot loads Linux from the slot
+# it boots, so an OS update replaces kernel and rootfs together. Image and
+# DTB come from this Buildroot run's own output, the modules from this
+# target directory; tools/slot_linux.py checks release, architecture and
+# board and records a manifest binding every file.
+if grep -qx 'BR2_EPILYKOS_BOOT_PROTOCOL_2=y' "${BR2_CONFIG}"; then
+	OS_SEQUENCE="${EPILYKOS_OS_SEQUENCE:-}"
+	case "${OS_SEQUENCE}" in
+		''|0*|*[!0-9]*) echo "post-build: protocol 2 needs EPILYKOS_OS_SEQUENCE (a positive integer)" >&2; exit 1 ;;
+	esac
+	SOURCE_COMMIT="${EPILYKOS_SOURCE_COMMIT:-$(git -C "${REPO_DIR}" rev-parse HEAD)}"
+	set -- "${TARGET_DIR}"/lib/modules/*
+	test "$#" -eq 1 && test -d "$1" || { echo "post-build: expected exactly one kernel module release" >&2; exit 1; }
+	KERNEL_RELEASE=$(basename "$1")
+	PLATFORM_FILE=$(mktemp)
+	trap 'rm -f "${PLATFORM_FILE}"' EXIT HUP INT TERM
+	python3 - "${PLATFORM_FILE}" "${CHANNEL}" "${OS_VERSION}" "${OS_SEQUENCE}" "${SOURCE_COMMIT}" \
+		"${KERNEL_RELEASE}" "${RELEASE}" <<-'PY'
+		import json, sys
+		path, channel, version, sequence, source, kernel, app = sys.argv[1:]
+		platform = {"schema": 1, "board": "raspberrypi3", "arch": "arm64", "slot_layout": "pi3-mbr-v1",
+		            "boot_protocol": 2, "channel": channel, "os_version": version, "os_sequence": int(sequence),
+		            "source": source, "kernel": kernel, "host_api": 2, "app_release": app}
+		# Canonical bytes (sorted, compact, ASCII), as tools/slot_linux.py requires.
+		open(path, "w").write(json.dumps(platform, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
+	PY
+	python3 "${REPO_DIR}/tools/slot_linux.py" --root "${TARGET_DIR}" \
+		--image "${BINARIES_DIR}/Image" --dtb "${BINARIES_DIR}/bcm2837-rpi-3-b.dtb" \
+		--platform "${PLATFORM_FILE}"
+	rm -f "${PLATFORM_FILE}"
+	trap - EXIT HUP INT TERM
+	# Protocol-2-only units and settings: the every-boot health supervisor
+	# instead of epilykos-mark-good, and systemd feeding the watchdog the
+	# loader armed.
+	cp -R "${BOARD_DIR}/protocol2-overlay/." "${TARGET_DIR}/"
+	echo "post-build: protocol 2 slot (OS sequence ${OS_SEQUENCE}, kernel ${KERNEL_RELEASE})"
+fi

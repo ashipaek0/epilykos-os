@@ -1,0 +1,5 @@
+# Protocol-2 cards (copied by post-build.sh): the every-boot health
+# supervisor replaces epilykos-mark-good. Read before 50-epilykos.preset;
+# the first matching line wins.
+enable epilykos-boot-health.service
+disable epilykos-mark-good.service

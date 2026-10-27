@@ -1,0 +1,202 @@
+From: ashipaek0 <folabiklan@gmail.com>
+Subject: [PATCH] Enforce Epilykos native platform-state guard when enabled
+
+The shared core is copied from the board directory by Buildroot hooks.
+The feature remains opt-in until the paired protocol-2 bootstrap is ready.
+
+Upstream: not applicable (Epilykos platform ABI)
+
+--- a/tools/env/Makefile
++++ b/tools/env/Makefile
+@@ -25,6 +25,11 @@
+ 	crc32.o ctype.o linux_string.o \
+ 	env_attr.o env_flags.o
+ 
++ifeq ($(EPILYKOS_ENV_GUARD),y)
++HOST_EXTRACFLAGS += -DEPILYKOS_ENV_GUARD
++lib-y += epk_env.o
++endif
++
+ fw_printenv-objs := fw_env_main.o $(lib-y)
+ 
+ quiet_cmd_crosstools_strip = STRIP   $^
+--- a/tools/env/fw_env.c
++++ b/tools/env/fw_env.c
+@@ -42,6 +42,9 @@
+ #include <mtd/ubi-user.h>
+ 
+ #include "fw_env.h"
++#ifdef EPILYKOS_ENV_GUARD
++#include "epk_env.h"
++#endif
+ 
+ struct env_opts default_opts = {
+ #ifdef CONFIG_FILE
+@@ -357,6 +360,60 @@
+ static int get_config(char *);
+ #endif
+ 
++#ifdef EPILYKOS_ENV_GUARD
++/* Epilykos Pi3 native MMC ABI only. The CLI holds fw_printenv.lock from
++ * before fw_env_open until after fw_env_flush; native RAUC uses this CLI.
++ * No MTD/UBI/tempfile fallback and no ignored short write/fsync errors.
++ */
++static int epk_topology(void)
++{
++	return have_redund_env && ENVSIZE(0) == EPK_ENV_SIZE &&
++		ENVSIZE(1) == EPK_ENV_SIZE && !strcmp(DEVNAME(0), DEVNAME(1)) &&
++		DEVOFFSET(0) == EPK_ENV_OFFSET_A && DEVOFFSET(1) == EPK_ENV_OFFSET_B &&
++		DEVTYPE(0) == MTD_ABSENT && DEVTYPE(1) == MTD_ABSENT &&
++		!IS_UBI(0) && !IS_UBI(1);
++}
++
++static int epk_read(void *context, unsigned int index, unsigned char *record)
++{
++	int fd, result;
++	(void)context;
++	fd = open(DEVNAME(index), O_RDONLY);
++	if (fd < 0) return -1;
++	result = pread(fd, record, EPK_ENV_SIZE, DEVOFFSET(index)) != EPK_ENV_SIZE;
++	if (close(fd)) result = -1;
++	return result;
++}
++
++static int epk_write(void *context, unsigned int index, const unsigned char *record)
++{
++	int fd, result;
++	(void)context;
++	fd = open(DEVNAME(index), O_RDWR);
++	if (fd < 0) return -1;
++	result = pwrite(fd, record, EPK_ENV_SIZE, DEVOFFSET(index)) != EPK_ENV_SIZE;
++	if (fsync(fd)) result = -1;
++	if (close(fd)) result = -1;
++	return result;
++}
++
++static int epk_flush(void)
++{
++	struct epk_env_io io = { NULL, epk_read, epk_write };
++	struct epk_env_selection selected;
++	int result;
++	*environment.crc = crc32(0, (uint8_t *)environment.data, ENV_SIZE);
++	result = epk_env_commit_snapshot(&io, environment.image, &selected);
++	if (result) {
++		fprintf(stderr, "Epilykos env commit refused: %d\n", result);
++		return -1;
++	}
++	dev_current = selected.index;
++	return epk_read(NULL, selected.index, environment.image);
++}
++#endif
++
++
+ static char *skip_chars(char *s)
+ {
+ 	for (; *s != '\0'; s++) {
+@@ -508,6 +565,9 @@
+ 
+ int fw_env_flush(struct env_opts *opts)
+ {
++#ifdef EPILYKOS_ENV_GUARD
++	return epk_flush(); /* No dirty/no-op shortcut: both copies must verify. */
++#endif
+ 	if (!opts)
+ 		opts = &default_opts;
+ 
+@@ -535,6 +595,12 @@
+  */
+ int fw_env_write(char *name, char *value)
+ {
++#ifdef EPILYKOS_ENV_GUARD
++	if (!strcmp(name, "epk_state_generation")) {
++		errno = EINVAL;
++		return -1;
++	}
++#endif
+ 	int len;
+ 	char *env, *nxt;
+ 	char *oldval = NULL;
+@@ -715,11 +781,20 @@
+ 		value[len++] = '\0';
+ 	}
+ 
++#ifdef EPILYKOS_ENV_GUARD
++	ret = fw_env_write(name, value);
++
++	free(value);
++
++	if (!ret)
++		ret = fw_env_flush(opts);
++#else
+ 	fw_env_write(name, value);
+ 
+ 	free(value);
+ 
+ 	ret = fw_env_flush(opts);
++#endif
+ 	fw_env_close(opts);
+ 
+ 	return ret;
+@@ -838,11 +913,21 @@
+ 	}
+ 	free(line);
+ 
++#ifdef EPILYKOS_ENV_GUARD
++	/* A failed batch must never commit its successful prefix. */
++	if (!feof(fp) || ferror(fp))
++		ret = -1;
++	if (strcmp(fname, "-") != 0 && fclose(fp))
++		ret = -1;
++	if (!ret)
++		ret = fw_env_flush(opts);
++#else
+ 	/* Close file if not stdin */
+ 	if (strcmp(fname, "-") != 0)
+ 		fclose(fp);
+ 
+ 	ret |= fw_env_flush(opts);
++#endif
+ 
+ 	fw_env_close(opts);
+ 
+@@ -1426,6 +1511,12 @@
+ 
+ 	if (parse_config(opts))	/* should fill envdevices */
+ 		return -EINVAL;
++#ifdef EPILYKOS_ENV_GUARD
++	if (!epk_topology()) {
++		fprintf(stderr, "Epilykos requires the exact redundant Pi3 MMC layout\n");
++		return -EINVAL;
++	}
++#endif
+ 
+ 	buf0 = calloc(1, CUR_ENVSIZE);
+ 	if (buf0 == NULL) {
+@@ -1516,6 +1607,19 @@
+ 		    !crc0_ok || !crc1_ok)
+ 			environment.dirty = 1;
+ 
++#ifdef EPILYKOS_ENV_GUARD
++		{
++			struct epk_env_selection selected;
++			(void)flag0;
++			(void)flag1;
++			ret = epk_env_select(buf0, buf1, &selected);
++			if (ret) {
++				fprintf(stderr, "Epilykos env selection refused: %d\n", ret);
++				goto open_cleanup;
++			}
++			dev_current = selected.index;
++		}
++#else
+ 		if (crc0_ok && !crc1_ok) {
+ 			dev_current = 0;
+ 		} else if (!crc0_ok && crc1_ok) {
+@@ -1562,6 +1666,7 @@
+ 			}
+ 		}
+ 
++#endif
+ 		/*
+ 		 * If we are reading, we don't need the flag and the CRC any
+ 		 * more, if we are writing, we will re-calculate CRC and update

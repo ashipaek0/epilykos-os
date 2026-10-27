@@ -1,0 +1,9 @@
+# Protocol 2 loads Image and DTB from the selected ROOT's ext4 filesystem.
+CONFIG_CMD_EXT4=y
+CONFIG_FS_EXT4=y
+# Arm the BCM2835 watchdog before Linux; boot-slot.cmd's terminal halt
+# (epk_boot_halt) stops it so an ineligible card halts instead of looping.
+CONFIG_WDT=y
+CONFIG_WDT_BCM2835=y
+CONFIG_WATCHDOG_AUTOSTART=y
+CONFIG_WATCHDOG_TIMEOUT_MSECS=15000

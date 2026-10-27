@@ -47,6 +47,20 @@ class ReleaseGates(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertFalse(self.run_policy(**values)['publish'])
 
+    def test_protocol2_cards_are_released_only_with_their_update_package(self):
+        for overrides in ({}, {'event': 'release', 'ref': 'refs/tags/v1.2'}):
+            with self.subTest(overrides=overrides):
+                result = self.run_policy(boot_protocol='2', os_publish='true', **overrides)
+                self.assertTrue(result['publish'])
+                self.assertFalse(result['diagnose'], 'QEMU boots the kernel from BOOT, which a protocol-2 card lacks')
+                for missing in ('false', ''):
+                    blocked = self.run_policy(boot_protocol='2', os_publish=missing, **overrides)
+                    self.assertFalse(blocked['publish'])
+                    self.assertIn('releasable_protocol', blocked['blocking'])
+        self.assertFalse(self.run_policy(boot_protocol='3', os_publish='true')['publish'])
+        self.assertTrue(self.run_policy(boot_protocol='1')['publish'])
+        self.assertTrue(self.run_policy(boot_protocol='')['publish'], 'older workflow runs stay protocol 1')
+
     def test_no_image_means_no_boot_attempt(self):
         for build in ('failure', 'cancelled', 'skipped'):
             self.assertFalse(self.run_policy(build=build, artifact='')['diagnose'])

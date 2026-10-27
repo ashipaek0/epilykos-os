@@ -1,0 +1,11 @@
+{
+  "host": "192.0.2.10",
+  "port": 22,
+  "user": "epilykos",
+  "identity_file": "/absolute/path/to/your/ssh-key",
+  "known_hosts_file": "/absolute/path/to/verified-known-hosts",
+  "image": "/absolute/path/to/experimental-sdcard.img",
+  "image_sha256": "REPLACE_WITH_SHA256_OF_THE_LOCAL_IMAGE",
+  "expected_card_cid": "REPLACE_WITH_32_HEX_CARD_CID",
+  "expected_source": "REPLACE_WITH_40_HEX_OS_SOURCE_COMMIT"
+}

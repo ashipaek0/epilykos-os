@@ -32,6 +32,16 @@ if [ $(( disk_end - part_end )) -gt 32768 ]; then
 	echo ", +" | sfdisk --no-reread --no-tell-kernel -N "${NUM}" "/dev/${DISK}"
 	partx -u -n "${NUM}" "/dev/${DISK}"
 	udevadm settle --timeout=30 || true
+	# The device is announced again after the table changes. systemd hears
+	# about that after udev has finished, so wait until it shows the DATA
+	# device as plugged again before the check and the mount rely on it.
+	if [ -z "${EPILYKOS_DATA_DEV:-}" ]; then
+		unit=$(systemd-escape -p --suffix=device /dev/disk/by-partuuid/45504c4b-04)
+		for _ in $(seq 40); do
+			systemctl is-active --quiet "${unit}" && break
+			sleep 0.25
+		done
+	fi
 fi
 
 # Grow the filesystem when it is more than 16 MiB smaller than the

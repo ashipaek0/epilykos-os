@@ -376,6 +376,13 @@ with tempfile.TemporaryDirectory() as d:
     assert app_accepts(f, NEW_PW) and not app_accepts(f, NEW_PW + 'x')
     for bad in ('abc', 'x' * 129, 'tab\there', None):
         expect(dashboard.PasswordError, dashboard.set_password, bad, f)
+    # Two-step sign-in (the app's two-step.json beside the password) goes with a reset, never with a refusal.
+    two = os.path.join(d, 'two-step.json')
+    Path(two).write_text('{"v":1}')
+    expect(dashboard.PasswordError, dashboard.set_password, 'abc', f)
+    assert os.path.exists(two), 'a refused password leaves two-step sign-in alone'
+    assert dashboard.set_password(NEW_PW, f) is True and not os.path.exists(two)
+    assert dashboard.set_password(NEW_PW, f) is False, 'nothing to switch off the second time'
     assert dashboard.parse_boot_file('\ufeff\n  ' + NEW_PW + '  \r\nignored\n') == NEW_PW
     expect(dashboard.PasswordError, dashboard.parse_boot_file, '\n \n')
 ok('dashboard password: stored as the app stores it (Node verifies it), 4-128 characters, first line of the file')
@@ -391,6 +398,9 @@ for label, data, replaced in [
         boot.mkdir()
         (boot / 'dashboard-password.txt').write_bytes(data)
         pwfile = d / 'app-data/settings-password'
+        two_step = d / 'app-data/two-step.json'
+        two_step.parent.mkdir()
+        two_step.write_text('{"v":1}')
         env = dict(os.environ, EPILYKOS_BOOT_DIR=str(boot), EPILYKOS_IWD_DIR=str(d / 'iwd'), EPILYKOS_RUN_DIR=str(d),
                    EPILYKOS_SSH_DIR=str(d / 'ssh'), EPILYKOS_WIFI_COUNTRY_FILE=str(d / 'country'),
                    EPILYKOS_DASHBOARD_PASSWORD_FILE=str(pwfile), PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
@@ -400,8 +410,10 @@ for label, data, replaced in [
         assert r.returncode == 0 and NEW_PW not in out, out
         if replaced:
             assert app_accepts(str(pwfile), NEW_PW) and os.listdir(boot) == [], (label, out)
-            assert 'dashboard password replaced' in out
+            assert 'dashboard password replaced; two-step sign-in switched off' in out
+            assert not two_step.exists(), 'a reset switches two-step sign-in off'
         else:
+            assert two_step.exists(), 'a file that is not used leaves it alone'
             assert not pwfile.exists() and os.listdir(boot) == ['dashboard-password.txt'], (label, out)
             assert 'left in place' in out, out
 ok('dashboard-password.txt on BOOT: replaces the password (UTF-8 or UTF-16) and is deleted; blank or short left in place')
@@ -416,12 +428,16 @@ with tempfile.TemporaryDirectory() as d:
     env = dict(os.environ, EPILYKOS_DASHBOARD_PASSWORD_FILE=str(pwfile), EPILYKOS_SYSTEMCTL=str(fake),
                PYTHONPATH=str(PYLIB), PYTHONDONTWRITEBYTECODE='1')
     cmd = [sys.executable, str(OVERLAY / 'usr/bin/epilykos-reset-password')]
+    two_step = d / 'two-step.json'
+    two_step.write_text('{"v":1}')
     r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\nsomething else\n', capture_output=True, text=True)
+    assert two_step.exists(), 'a refused reset leaves two-step sign-in alone'
     assert r.returncode == 1 and "don't match" in r.stderr and not pwfile.exists() and not calls.exists()
     r = subprocess.run(cmd, env=env, input='abc\nabc\n', capture_output=True, text=True)
     assert r.returncode == 1 and '4 to 128' in r.stderr and not pwfile.exists()
     r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\n{NEW_PW}\n', capture_output=True, text=True)
     assert r.returncode == 0 and app_accepts(str(pwfile), NEW_PW), r.stderr
+    assert not two_step.exists() and 'Two-step sign-in is switched off' in r.stdout
     assert calls.read_text().splitlines() == ['--no-block restart epilykos.service']
     assert NEW_PW not in r.stdout + r.stderr
 ok('epilykos-reset-password: asks twice, refuses a mismatch or a short one, saves it and restarts Epilykos')

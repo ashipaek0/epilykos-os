@@ -10,6 +10,9 @@ The app keeps its password in /data/epilykos/app-data/settings-password as
 defaults (N=16384, r=8, p=1) and salt is 16 random bytes in hex, used as a
 string (modules/sessionAuth.js). The app reads it at start, so Epilykos is
 restarted, or not yet started, when it changes. Never logged.
+
+Either reset also switches two-step sign-in off (the app's two-step.json next
+to the password file), so a lost phone is never a lock-out.
 """
 import hashlib
 import os
@@ -18,6 +21,7 @@ import secrets
 PASSWORD_FILE = os.environ.get('EPILYKOS_DASHBOARD_PASSWORD_FILE', '/data/epilykos/app-data/settings-password')
 APP_UID = APP_GID = 1000
 BOOT_FILE = 'dashboard-password.txt'
+TWO_STEP_FILE = 'two-step.json'
 
 
 class PasswordError(ValueError):
@@ -42,7 +46,19 @@ def verify(password, path=None):
     return secrets.compare_digest(hash_password(password, salt), stored)
 
 
+def clear_two_step(path=None):
+    """Remove the app's two-step sign-in state beside the password file.
+    True when there was some."""
+    try:
+        os.unlink(os.path.join(os.path.dirname(path or PASSWORD_FILE), TWO_STEP_FILE))
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def set_password(password, path=None):
+    """Save a new password and switch two-step sign-in off. Returns True when
+    two-step sign-in had been on."""
     path = path or PASSWORD_FILE
     validate(password)
     salt = secrets.token_hex(16)
@@ -58,6 +74,7 @@ def set_password(password, path=None):
     except PermissionError:
         pass  # tests run unprivileged
     os.replace(tmp, path)
+    return clear_two_step(path)
 
 
 def parse_boot_file(text):

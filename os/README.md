@@ -81,7 +81,9 @@ own partition layout).
 - Forgotten dashboard password: a `dashboard-password.txt` on BOOT (the
   new password on its first line, read before Epilykos starts, then
   deleted) or `epilykos-reset-password` on the console. Neither works
-  over the network.
+  over the network. Either one also switches off two-step sign-in
+  (`two-step.json` beside the password file), so a lost phone is never a
+  lock-out.
 - Factory reset (`C-HOST-001`): Settings → System, `epilykos-factory-reset`
   on the console, or a `factory-reset.txt` on BOOT saying `ERASE`. Each
   leaves that file on BOOT; the next boot writes a new, empty DATA before

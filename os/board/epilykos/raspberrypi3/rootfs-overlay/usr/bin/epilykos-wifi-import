@@ -103,11 +103,11 @@ def import_dashboard_password():
             'removed before the computer finished writing it); left in place')
         return
     try:
-        dashboard.set_password(dashboard.parse_boot_file(wifi.decode_boot_file(data)))
+        two_step = dashboard.set_password(dashboard.parse_boot_file(wifi.decode_boot_file(data)))
     except (dashboard.PasswordError, UnicodeError) as e:
         log(f'{name}: not used ({e}); left in place')
         return
-    log(f'{name}: dashboard password replaced')
+    log(f'{name}: dashboard password replaced' + ('; two-step sign-in switched off' if two_step else ''))
     if boot_rw(True):
         try:
             os.unlink(path)

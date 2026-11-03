@@ -22,7 +22,7 @@ EpilykosOS is a dedicated operating system for running [Epilykos](https://github
 
 **Can't open the dashboard?** From another computer, try to ping a third device on the same network. If that fails too, the router is keeping devices apart: check its "AP isolation" or "client isolation" settings and restart it. Plugging the Pi into Ethernet also works.
 
-**Forgot the dashboard password?** Put a file named `dashboard-password.txt` with the new password on its first line on the SD card's boot drive, then start the Pi. The file is deleted once it is used. With a keyboard and screen, `epilykos-reset-password` does the same.
+**Forgot the dashboard password?** Put a file named `dashboard-password.txt` with the new password (12 to 128 characters) on its first line on the SD card's boot drive, then start the Pi. The file is deleted once it is used. With a keyboard and screen, `epilykos-reset-password` does the same.
 
 **Starting over (factory reset)?** Settings → System → Factory reset erases everything the box keeps (Epilykos data and settings, backups, Wi-Fi networks, SSH, Bluetooth pairings, logs) and restarts it as if newly flashed. Download a backup first if you want your data back later. Without the dashboard, put a file named `factory-reset.txt` containing the word `ERASE` on the SD card's boot drive and start the Pi; with a keyboard and screen, `epilykos-factory-reset` does the same.
 

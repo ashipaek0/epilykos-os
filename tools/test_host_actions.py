@@ -374,7 +374,7 @@ with tempfile.TemporaryDirectory() as d:
     dashboard.set_password(NEW_PW, f)
     assert oct(os.stat(f).st_mode & 0o777) == '0o600'
     assert app_accepts(f, NEW_PW) and not app_accepts(f, NEW_PW + 'x')
-    for bad in ('abc', 'x' * 129, 'tab\there', None):
+    for bad in ('abc', 'x' * 11, 'x' * 129, 'tab\there', None):
         expect(dashboard.PasswordError, dashboard.set_password, bad, f)
     # Two-step sign-in (the app's two-step.json beside the password) goes with a reset, never with a refusal.
     two = os.path.join(d, 'two-step.json')
@@ -385,13 +385,14 @@ with tempfile.TemporaryDirectory() as d:
     assert dashboard.set_password(NEW_PW, f) is False, 'nothing to switch off the second time'
     assert dashboard.parse_boot_file('\ufeff\n  ' + NEW_PW + '  \r\nignored\n') == NEW_PW
     expect(dashboard.PasswordError, dashboard.parse_boot_file, '\n \n')
-ok('dashboard password: stored as the app stores it (Node verifies it), 4-128 characters, first line of the file')
+ok('dashboard password: stored as the app stores it (Node verifies it), 12-128 characters, first line of the file')
 
 for label, data, replaced in [
         ('UTF-8', (NEW_PW + '\n').encode(), True),
         ('UTF-16 (Windows Notepad)', ('\ufeff' + NEW_PW + '\r\n').encode('utf-16-le'), True),
         ('blank (card pulled too soon)', b'', False),
-        ('too short', b'abc\n', False)]:
+        ('too short', b'abc\n', False),
+        ('eleven characters', b'eleven-char\n', False)]:
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         boot = d / 'boot'
@@ -434,7 +435,7 @@ with tempfile.TemporaryDirectory() as d:
     assert two_step.exists(), 'a refused reset leaves two-step sign-in alone'
     assert r.returncode == 1 and "don't match" in r.stderr and not pwfile.exists() and not calls.exists()
     r = subprocess.run(cmd, env=env, input='abc\nabc\n', capture_output=True, text=True)
-    assert r.returncode == 1 and '4 to 128' in r.stderr and not pwfile.exists()
+    assert r.returncode == 1 and '12 to 128' in r.stderr and not pwfile.exists()
     r = subprocess.run(cmd, env=env, input=f'{NEW_PW}\n{NEW_PW}\n', capture_output=True, text=True)
     assert r.returncode == 0 and app_accepts(str(pwfile), NEW_PW), r.stderr
     assert not two_step.exists() and 'Two-step sign-in is switched off' in r.stdout

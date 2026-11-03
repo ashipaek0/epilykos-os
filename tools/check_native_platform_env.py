@@ -6,6 +6,7 @@ pkg-config and GLib/GIO/OpenSSL development headers. Downloads are hash pinned.
 """
 import argparse
 import hashlib
+import http.client
 import os
 from pathlib import Path
 import shlex
@@ -20,15 +21,20 @@ ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / "os/board/epilykos/raspberrypi3"
 # U-Boot moved its release archives off ftp.denx.de in October 2026.
 UBOOT = "https://git.u-boot-project.org/u-boot/u-boot/-/releases"
+# Buildroot's backup site, which the image build also falls back to.
+MIRROR = "https://sources.buildroot.net"
 SOURCES = {
     "u-boot-2025.10.tar.bz2": (
-        f"{UBOOT}/v2025.10/downloads/u-boot-2025.10.tar.bz2",
+        (f"{UBOOT}/v2025.10/downloads/u-boot-2025.10.tar.bz2",
+         f"{MIRROR}/uboot/u-boot-2025.10.tar.bz2"),
         "b4f032848e56cc8f213ad59f9132c084dbbb632bc29176d024e58220e0efdf4a"),
     "u-boot-2026.04.tar.bz2": (
-        f"{UBOOT}/v2026.04/downloads/u-boot-2026.04.tar.bz2",
+        (f"{UBOOT}/v2026.04/downloads/u-boot-2026.04.tar.bz2",
+         f"{MIRROR}/uboot-tools/u-boot-2026.04.tar.bz2"),
         "ac7c04b8b7004923b00a4e5d6699c5df4d21233bac9fda690d8cfbc209fff2fd"),
     "rauc-1.15.2.tar.xz": (
-        "https://github.com/rauc/rauc/releases/download/v1.15.2/rauc-1.15.2.tar.xz",
+        ("https://github.com/rauc/rauc/releases/download/v1.15.2/rauc-1.15.2.tar.xz",
+         f"{MIRROR}/rauc/rauc-1.15.2.tar.xz"),
         "127a24cde208c65b837ae978c695a00730f1094ee8b6c7d48cf58ef846eae340"),
 }
 
@@ -38,11 +44,11 @@ def run(args, **kwargs):
     return subprocess.run(list(map(str, args)), check=True, **kwargs)
 
 
-def source(cache, work, name):
-    url, expected = SOURCES[name]
-    archive = cache / name
-    if not archive.exists():
-        with tempfile.NamedTemporaryFile(dir=cache, delete=False) as temporary:
+def download(urls, expected, archive):
+    """Keep the first copy whose bytes match the pinned hash."""
+    failures = []
+    for url in urls:
+        with tempfile.NamedTemporaryFile(dir=archive.parent, delete=False) as temporary:
             part = Path(temporary.name)
             try:
                 with urllib.request.urlopen(url, timeout=60) as response:
@@ -50,10 +56,22 @@ def source(cache, work, name):
                 temporary.close()
                 with part.open("rb") as stream:
                     if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
-                        raise ValueError(f"source hash mismatch: {name}")
+                        raise ValueError("source hash mismatch")
                 part.replace(archive)
+                return
+            except (OSError, http.client.HTTPException, ValueError) as error:
+                failures.append(f"{url}: {error!r}")
+                print(f"warning: {failures[-1]}", file=sys.stderr, flush=True)
             finally:
                 part.unlink(missing_ok=True)
+    raise RuntimeError(f"no site served {archive.name}: " + "; ".join(failures))
+
+
+def source(cache, work, name):
+    urls, expected = SOURCES[name]
+    archive = cache / name
+    if not archive.exists():
+        download(urls, expected, archive)
     with archive.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
             raise ValueError(f"cached source hash mismatch: {name}")

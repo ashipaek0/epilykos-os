@@ -18,12 +18,14 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / "os/board/epilykos/raspberrypi3"
+# U-Boot moved its release archives off ftp.denx.de in October 2026.
+UBOOT = "https://git.u-boot-project.org/u-boot/u-boot/-/releases"
 SOURCES = {
     "u-boot-2025.10.tar.bz2": (
-        "https://ftp.denx.de/pub/u-boot/u-boot-2025.10.tar.bz2",
+        f"{UBOOT}/v2025.10/downloads/u-boot-2025.10.tar.bz2",
         "b4f032848e56cc8f213ad59f9132c084dbbb632bc29176d024e58220e0efdf4a"),
     "u-boot-2026.04.tar.bz2": (
-        "https://ftp.denx.de/pub/u-boot/u-boot-2026.04.tar.bz2",
+        f"{UBOOT}/v2026.04/downloads/u-boot-2026.04.tar.bz2",
         "ac7c04b8b7004923b00a4e5d6699c5df4d21233bac9fda690d8cfbc209fff2fd"),
     "rauc-1.15.2.tar.xz": (
         "https://github.com/rauc/rauc/releases/download/v1.15.2/rauc-1.15.2.tar.xz",

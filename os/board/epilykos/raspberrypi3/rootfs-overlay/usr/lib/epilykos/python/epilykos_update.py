@@ -31,10 +31,14 @@ the baseline's.
 import json
 import os
 import re
+import socket
 import subprocess
 import tempfile
 import threading
 import time
+import http.client
+import urllib.error
+import urllib.parse
 import urllib.request
 
 import epilykos_maintenance as maintenance
@@ -203,24 +207,90 @@ def validate(m):
             'digest': app['digest'], 'source': app['source']}
 
 
+# Network settings for the update check. A home link can be slow or drop a connection
+# now and then (and a broken IPv6 route makes the first address time out), so the
+# check tries a few times and says which host failed and at which step.
+CONNECT_TIMEOUT = 10       # per address; a dead address is skipped quickly
+READ_TIMEOUT = 60
+ATTEMPTS = 3
+RETRY_PAUSES = (2, 5)      # seconds to wait before the 2nd and 3rd attempt
+
+
+def _connect(address, timeout, source_address=None, trace=None, label=None):
+    """Open a TCP connection, IPv4 addresses first, falling back to the others."""
+    host, port = address
+    if trace is not None:
+        trace.update(host=label or host, step='connecting')
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    infos.sort(key=lambda i: i[0] != socket.AF_INET)   # stable: IPv4 first
+    last = None
+    for family, kind, proto, _canon, addr in infos:
+        sock = socket.socket(family, kind, proto)
+        try:
+            sock.settimeout(CONNECT_TIMEOUT)
+            sock.connect(addr)
+            sock.settimeout(READ_TIMEOUT)
+            if trace is not None:
+                trace['step'] = 'reading'
+            return sock
+        except OSError as e:
+            sock.close()
+            last = e
+    raise last or OSError(f'no address for {host}')
+
+
+def _https_handler(trace):
+    class Conn(http.client.HTTPSConnection):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._create_connection = lambda address, timeout, source_address=None: _connect(address, timeout, source_address, trace, self._tunnel_host)
+
+    class Handler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(Conn, req)
+
+    return Handler()
+
+
+def _failure(e, trace, url):
+    host = trace.get('host') or urllib.parse.urlsplit(url).hostname or 'the server'
+    reason = getattr(e, 'reason', None) or e
+    if isinstance(e, (socket.timeout, TimeoutError)) or isinstance(reason, (socket.timeout, TimeoutError)):
+        reason = 'timed out'
+    step = {'connecting': 'while connecting to', 'reading': 'while reading from'}.get(trace.get('step'), 'reaching')
+    return f'{reason} {step} {host}'
+
+
 def _fetch(url):
-    req = urllib.request.Request(url, headers={'User-Agent': 'epilykos-hostd'})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = r.read(MAX_MANIFEST + 1)
-    if len(data) > MAX_MANIFEST:
-        raise UpdateError('The update manifest is too large')
-    return data
+    """Fetch one small file, trying up to ATTEMPTS times. Raises UpdateError."""
+    problem = ''
+    for attempt in range(ATTEMPTS):
+        if attempt:
+            time.sleep(RETRY_PAUSES[min(attempt - 1, len(RETRY_PAUSES) - 1)])
+        trace = {}
+        req = urllib.request.Request(url, headers={'User-Agent': 'epilykos-hostd'})
+        try:
+            with urllib.request.build_opener(_https_handler(trace)).open(req, timeout=CONNECT_TIMEOUT) as r:
+                data = r.read(MAX_MANIFEST + 1)
+        except urllib.error.HTTPError as e:
+            # A 4xx answer will not change on a retry; a 5xx might.
+            problem = f'the server answered {e.code} for {urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]}'
+            if e.code < 500:
+                break
+            continue
+        except Exception as e:  # noqa: BLE001 - network errors of every kind
+            problem = _failure(e, trace, url)
+            continue
+        if len(data) > MAX_MANIFEST:
+            raise UpdateError('The update manifest is too large')
+        return data
+    raise UpdateError(f'Could not reach the update server ({problem}; tried {attempt + 1} time{"s" if attempt else ""})')
 
 
 def fetch_latest():
     base = FEED.format(channel=baseline()['channel'] or 'stable').rstrip('/')
-    try:
-        manifest_bytes = _fetch(base + '/manifest.json')
-        signature = _fetch(base + '/manifest.json.sig')
-    except UpdateError:
-        raise
-    except Exception as e:  # noqa: BLE001 - network errors of every kind
-        raise UpdateError(f'Could not reach the update server ({getattr(e, "reason", None) or e})')
+    manifest_bytes = _fetch(base + '/manifest.json')
+    signature = _fetch(base + '/manifest.json.sig')
     return verify(manifest_bytes, signature), manifest_bytes, signature
 
 

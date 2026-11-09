@@ -3,8 +3,8 @@
 schema: 1
 release: 1.2.1
 channel: stable
-sequence: 25
+sequence: 26
 images:
   epilykos:
-    digest: sha256:c00575ff0a4950bc0e4b55c2bb0de314ca2806ba1793e9c6e19e7ace89f580ab
+    digest: sha256:c007e01544fe4fdc7550a01cc5861ae6c6185a7e8a29f015769bf5cc0f3ede47
     source: irunmole/epilykos

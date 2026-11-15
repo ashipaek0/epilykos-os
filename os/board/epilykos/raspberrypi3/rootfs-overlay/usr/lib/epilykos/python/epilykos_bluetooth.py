@@ -27,12 +27,24 @@ class PairingError(ValueError):
     pass
 
 
-# Recovery (bluetooth_recover), asked for by the app when BlueZ is stuck. On
-# the Pi 3B a reply lost on the Bluetooth UART leaves bluetoothd waiting on an
-# operation that never finishes: every later connect or scan is refused with
-# org.bluez.Error.InProgress until bluetoothd restarts (which also powers the
-# adapter up again). At most once per RECOVER_INTERVAL_S, remembered in /run
-# so neither an app nor a hostd restart can turn it into a loop.
+# Recovery (bluetooth_recover), asked for by the app when Bluetooth is stuck.
+# Two different faults, so two different layers:
+#   in_progress  On the Pi 3B a reply lost on the Bluetooth UART leaves
+#                bluetoothd waiting on an operation that never finishes: every
+#                later connect or scan is refused with
+#                org.bluez.Error.InProgress. The chip is fine; bluetoothd is
+#                restarted (which also powers the adapter up again).
+#   no_adapter   No adapter was found. When the kernel has no hciN either, the
+#                chip failed to start up (firmware load or a lost reply while
+#                the driver probed), and restarting bluetoothd cannot help: it
+#                has nothing to talk to. The chip's driver is reloaded
+#                (hci_uart unloaded and loaded again, which probes the chip and
+#                loads its firmware again), then bluetoothd is started. When
+#                the kernel does have an adapter, only bluetoothd is stuck, and
+#                it is restarted as above.
+# At most once per RECOVER_INTERVAL_S, remembered in /run so neither an app nor
+# a hostd restart can turn it into a loop. The driver reload takes several
+# seconds, so it runs in the background and the reply says which layer it is.
 RECOVER_FILE = os.environ.get('EPILYKOS_BLUETOOTH_RECOVER_FILE', '/run/epilykos/bluetooth-recover')
 RECOVER_INTERVAL_S = 600
 RECOVER_REASONS = {
@@ -40,11 +52,46 @@ RECOVER_REASONS = {
     'no_adapter': 'no Bluetooth adapter',
 }
 SYSTEMCTL = os.environ.get('EPILYKOS_SYSTEMCTL', 'systemctl')
+MODPROBE = os.environ.get('EPILYKOS_MODPROBE', 'modprobe')
+SYS_BLUETOOTH = os.environ.get('EPILYKOS_SYS_BLUETOOTH', '/sys/class/bluetooth')
+# The chip's driver (hci_bcm is built into hci_uart); its options come from modprobe.d.
+DRIVER_MODULE = 'hci_uart'
+UNLOAD_PAUSE_S = 1.0
+ADAPTER_WAIT_S = 20.0
 
 
-def recover(reason):
-    """Restart bluetoothd for a stuck BlueZ, unless that was done in the last
-    RECOVER_INTERVAL_S. Replies whether it restarted and, if not, when it may."""
+def adapter_present():
+    """True when the kernel has a Bluetooth adapter (hci0, ...)."""
+    try:
+        return any(name.startswith('hci') for name in os.listdir(SYS_BLUETOOTH))
+    except OSError:
+        return False
+
+
+def reload_driver():
+    """Stop bluetoothd, reload the chip's driver, wait for the adapter, start bluetoothd.
+    Returns whether the adapter came back."""
+    subprocess.run([SYSTEMCTL, 'stop', 'bluetooth.service'], check=False, timeout=30)
+    subprocess.run([MODPROBE, '-r', DRIVER_MODULE], check=False, timeout=30)
+    time.sleep(UNLOAD_PAUSE_S)
+    subprocess.run([MODPROBE, DRIVER_MODULE], check=False, timeout=30)
+    deadline = time.monotonic() + ADAPTER_WAIT_S
+    while not adapter_present() and time.monotonic() < deadline:
+        time.sleep(0.25)
+    back = adapter_present()
+    subprocess.run([SYSTEMCTL, 'start', 'bluetooth.service'], check=False, timeout=30)
+    if back:
+        print('epilykos-hostd: Bluetooth recovery: the adapter is back after reloading the driver', flush=True)
+    else:
+        print(f'epilykos-hostd: Bluetooth recovery: no adapter after reloading {DRIVER_MODULE}; '
+              'power the box off and on again', flush=True)
+    return back
+
+
+def recover(reason, background=True):
+    """Recover a stuck Bluetooth at the layer that failed, unless that was done
+    in the last RECOVER_INTERVAL_S. Replies whether it acted (and at which
+    layer: 'driver' or 'service') and, if not, when it may."""
     if reason not in RECOVER_REASONS:
         raise PairingError('Unknown Bluetooth recovery reason')
     try:
@@ -52,13 +99,22 @@ def recover(reason):
         if 0 <= age < RECOVER_INTERVAL_S:
             return {'ok': True, 'restarted': False, 'retry_in': int(RECOVER_INTERVAL_S - age) + 1}
     except OSError:
-        pass  # never restarted on this boot
+        pass  # never recovered on this boot
     os.makedirs(os.path.dirname(RECOVER_FILE), exist_ok=True)
     with open(RECOVER_FILE, 'w') as f:
         f.write(f'{int(time.time())}\n')
-    print(f'epilykos-hostd: Bluetooth recovery: {RECOVER_REASONS[reason]}; restarting bluetoothd', flush=True)
-    subprocess.run([SYSTEMCTL, '--no-block', 'restart', 'bluetooth.service'], check=False, timeout=30)
-    return {'ok': True, 'restarted': True}
+    layer = 'driver' if reason == 'no_adapter' and not adapter_present() else 'service'
+    if layer == 'driver':
+        print(f'epilykos-hostd: Bluetooth recovery: {RECOVER_REASONS[reason]} and the kernel has none either; '
+              f'reloading the {DRIVER_MODULE} driver', flush=True)
+        if background:
+            threading.Thread(target=reload_driver, daemon=True).start()
+        else:
+            reload_driver()
+    else:
+        print(f'epilykos-hostd: Bluetooth recovery: {RECOVER_REASONS[reason]}; restarting bluetoothd', flush=True)
+        subprocess.run([SYSTEMCTL, '--no-block', 'restart', 'bluetooth.service'], check=False, timeout=30)
+    return {'ok': True, 'restarted': True, 'layer': layer}
 
 
 async def bluez_owner(bus):

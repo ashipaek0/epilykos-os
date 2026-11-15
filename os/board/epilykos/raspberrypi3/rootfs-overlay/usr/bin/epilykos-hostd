@@ -8,7 +8,7 @@ Listens on /run/epilykos-host/host.sock, which only root and the
 container's app user (gid 1000) can open; the container sees the same
 directory. One JSON request per line, one JSON reply per line:
 
-    {"action": "status"}                        also the clock, SD card size and network
+    {"action": "status"}                        also the clock, SD card size, network and power (undervoltage)
     {"action": "restart"} | {"action": "shutdown"}
     {"action": "factory_reset", "confirm": "ERASE"}
                                                 erase DATA on the next boot, then restart now
@@ -27,7 +27,8 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "bluetooth_reply", "id": "...", "value": "1234"}   PIN, passkey or true
     {"action": "bluetooth_remove", "address": "AA:BB:CC:DD:EE:FF"}
     {"action": "bluetooth_recover", "reason": "in_progress"}   restart a stuck BlueZ
-                                                (or "no_adapter"); at most once per 10 min
+                                                (or "no_adapter": reload the chip's driver when the
+                                                kernel has no adapter); at most once per 10 min
     {"action": "update_status"}                 installing? how did the last update end?
     {"action": "update_check"}                  is a newer signed app release out?
     {"action": "update_apply", "target": "app"} install it (replies at once, then works)
@@ -61,6 +62,7 @@ import epilykos_os_activate as os_activate  # noqa: E402
 import epilykos_os_trust as os_trust  # noqa: E402
 import epilykos_os_update as os_update  # noqa: E402
 import epilykos_port as port  # noqa: E402
+import epilykos_power as power  # noqa: E402
 import epilykos_reset as reset  # noqa: E402
 import epilykos_ssh as ssh  # noqa: E402
 import epilykos_storage as storage  # noqa: E402
@@ -128,7 +130,8 @@ def handle(req):
     if action == 'status':
         return {'ok': True, 'appliance': True, 'os_version': os_version(),
                 'wifi_setup_until': wifi_setup_until(), 'ssh': ssh.status(), 'port': port.read(),
-                'clock': system.clock(), 'storage': system.storage(), 'network': network_status()}
+                'clock': system.clock(), 'storage': system.storage(), 'network': network_status(),
+                'power': power.status()}
     if action == 'set_timezone':
         # The app gets TZ when its container starts (epilykos-run), so a new
         # zone needs a restart; the same zone again does not.
@@ -332,6 +335,7 @@ def main():
     # The container reads clock.json from its start, so write it before READY.
     write_clock()
     bluetooth.start()
+    power.start()
     threading.Thread(target=clock_loop, daemon=True).start()
     log(f'listening on {SOCKET}')
     notify_ready()

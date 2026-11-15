@@ -29,8 +29,9 @@ class PasswordError(ValueError):
 
 
 def validate(password):
-    if not isinstance(password, str) or not 4 <= len(password) <= 128:
-        raise PasswordError('the dashboard password must be 4 to 128 characters')
+    # 12 like the app's setup wizard, which remote access also needs.
+    if not isinstance(password, str) or not 12 <= len(password) <= 128:
+        raise PasswordError('the dashboard password must be 12 to 128 characters')
     if any(ord(c) < 32 or ord(c) == 127 for c in password):
         raise PasswordError('the dashboard password must not contain control characters')
     return password

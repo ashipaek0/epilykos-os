@@ -33,6 +33,7 @@ test:
 	$(PYTHON) tools/test_os_release.py
 	$(PYTHON) tools/test_make_os_policy.py
 	$(PYTHON) tools/test_platform_env.py
+	$(PYTHON) tools/test_native_sources.py
 	$(PYTHON) tools/test_bootstrap_adoption.py
 	$(PYTHON) tools/test_os_slot_acceptance.py
 	$(PYTHON) tools/test_release_gates.py
@@ -51,5 +52,6 @@ test:
 	$(PYTHON) tools/test_netinfo.py
 	$(PYTHON) tools/test_bluetooth_pairing.py
 	$(PYTHON) tools/test_bluetooth_recover.py
+	$(PYTHON) tools/test_power.py
 	$(PYTHON) tools/test_improv_dbus.py
 	$(PYTHON) tools/test_verify_app_release.py

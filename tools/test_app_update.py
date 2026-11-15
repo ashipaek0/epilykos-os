@@ -145,6 +145,73 @@ assert 'Could not reach' in up.check()['app']['error']
 up.FEED = f'file://{feed}'
 ok('check: tampered, wrong key, wrong channel, replayed sequence and no network are all refused')
 
+# -- network failures: retried, and the message names the host and the step -----------
+import urllib.error
+up.RETRY_PAUSES = (0, 0)
+real_build_opener = urllib.request.build_opener
+
+
+class FakeOpener:
+    def __init__(self, script):
+        self.script, self.n_calls = list(script), 0
+
+    def open(self, req, timeout=None):
+        self.n_calls += 1
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        import io
+        return io.BytesIO(step)
+
+
+def with_script(script, fn):
+    fake = FakeOpener(script)
+    urllib.request.build_opener = lambda *a, **k: fake
+    try:
+        return fn(), fake.n_calls
+    finally:
+        urllib.request.build_opener = real_build_opener
+
+
+import socket as _socket
+data, n_calls = with_script([_socket.timeout('The read operation timed out'), urllib.error.URLError('temporary failure'), b'{}'],
+                          lambda: up._fetch('https://example.invalid/manifest.json'))
+assert data == b'{}' and n_calls == 3, (data, n_calls)
+try:
+    with_script([_socket.timeout('x')] * 3, lambda: up._fetch('https://github.com/x/manifest.json'))
+    raise AssertionError('should have failed')
+except up.UpdateError as e:
+    msg = str(e)
+assert msg.startswith('Could not reach the update server') and 'timed out' in msg and 'github.com' in msg and 'tried 3 times' in msg, msg
+assert 'read operation' not in msg
+try:
+    with_script([urllib.error.HTTPError('https://github.com/x', 404, 'Not Found', {}, None)], lambda: up._fetch('https://github.com/x/manifest.json'))
+    raise AssertionError('should have failed')
+except up.UpdateError as e:
+    assert '404' in str(e) and 'manifest.json' in str(e) and 'tried 1 time)' in str(e), str(e)
+_, n_calls = with_script([urllib.error.HTTPError('https://github.com/x', 503, 'Unavailable', {}, None), b'ok'],
+                       lambda: up._fetch('https://github.com/x/manifest.json'))
+assert n_calls == 2, 'a 5xx answer is retried'
+ok('network: retried with a pause, a 404 is not, and the error names the host, the step and the attempts')
+
+# IPv4 is tried first, and the connection reports the step it is on.
+srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+srv.bind(('127.0.0.1', 0))
+srv.listen(1)
+trace = {}
+conn = up._connect(('localhost', srv.getsockname()[1]), 5, None, trace)
+assert conn.family == _socket.AF_INET and trace == {'host': 'localhost', 'step': 'reading'}, (conn.family, trace)
+conn.close()
+port = srv.getsockname()[1]
+srv.close()
+trace = {}
+try:
+    up._connect(('127.0.0.1', port), 5, None, trace)
+    raise AssertionError('should have failed')
+except OSError:
+    assert trace == {'host': '127.0.0.1', 'step': 'connecting'}, trace
+ok('network: IPv4 addresses first; a refused connection is reported while connecting')
+
 # -- installing ---------------------------------------------------------------------
 try:
     up.apply('os')

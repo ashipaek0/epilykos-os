@@ -45,6 +45,12 @@ CONFIG_BRCMFMAC=m
 # The Wi-Fi chip's SDIO host (bcm2835-sdhci); not in the arm64 defconfig.
 CONFIG_MMC_SDHCI_IPROC=m
 
+# -- Undervoltage warning (shown in Epilykos settings): the firmware's
+# low-voltage flag as hwmon rpi_volt/in0_lcrit_alarm, built in so it is
+# there from boot.
+CONFIG_HWMON=y
+CONFIG_SENSORS_RASPBERRYPI_HWMON=y
+
 # -- Wi-Fi: iwd does its cryptography through the kernel (AF_ALG sockets
 # and keyctl), none of which the arm64 defconfig enables.
 CONFIG_CRYPTO_USER_API_HASH=y

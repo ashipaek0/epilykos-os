@@ -51,5 +51,6 @@ test:
 	$(PYTHON) tools/test_netinfo.py
 	$(PYTHON) tools/test_bluetooth_pairing.py
 	$(PYTHON) tools/test_bluetooth_recover.py
+	$(PYTHON) tools/test_power.py
 	$(PYTHON) tools/test_improv_dbus.py
 	$(PYTHON) tools/test_verify_app_release.py

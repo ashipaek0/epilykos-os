@@ -43,6 +43,7 @@ import urllib.request
 
 import epilykos_maintenance as maintenance
 import epilykos_app_compat as compat
+import epilykos_pull_progress as pull_progress
 
 UPDATE_DIR = os.environ.get('EPILYKOS_UPDATE_DIR', '/data/epilykos/updater')
 IMAGE_ENV = os.environ.get('EPILYKOS_IMAGE_ENV', '/usr/lib/epilykos/image.env')
@@ -65,6 +66,7 @@ IMAGE_ID_RE = re.compile(r'^[0-9a-f]{64}$')
 
 _lock = threading.Lock()
 _running = threading.Event()
+_download = None   # pull_progress.Progress while the new image is downloading
 
 
 class UpdateError(Exception):
@@ -287,6 +289,51 @@ def _fetch(url):
     raise UpdateError(f'Could not reach the update server ({problem}; tried {attempt + 1} time{"s" if attempt else ""})')
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _http_get(url, headers, timeout=10):
+    """One GET for the download estimate: (status, lower-cased headers, body). Redirects are
+    handed back, not followed, so a registry token never goes to the storage behind it."""
+    req = urllib.request.Request(url, headers=dict(headers, **{'User-Agent': 'epilykos-hostd'}))
+    opener = urllib.request.build_opener(_https_handler({}), _NoRedirect)
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status, {k.lower(): v for k, v in r.headers.items()}, r.read(pull_progress.MAX_JSON + 1)
+    except urllib.error.HTTPError as e:   # 401 (login needed) and 3xx (redirect) arrive here
+        return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read(pull_progress.MAX_JSON + 1)
+
+
+def _local_layers():
+    """The layer lists (diff IDs) of the images this box has: the running one, the previous, the preloaded."""
+    ids = []
+    for img in (current().get('image_id'), (_read_json('previous.json') or {}).get('image_id'), baseline().get('image_id')):
+        if img and IMAGE_ID_RE.match(img) and img not in ids:
+            ids.append(img)
+    out = []
+    for img in ids:
+        try:
+            r = subprocess.run([PODMAN, 'image', 'inspect', '--format', '{{json .RootFS.Layers}}', img],
+                               capture_output=True, text=True, timeout=10)
+            layers = json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        if isinstance(layers, list):
+            out.append([x for x in layers if isinstance(x, str)])
+    return out
+
+
+def _download_plan(candidate):
+    base = os.environ.get('EPILYKOS_REGISTRY_URL') or pull_progress.registry_base(REGISTRY)
+
+    def plan():
+        registry = pull_progress.Registry(base, candidate['source'], _http_get)
+        return pull_progress.plan_total(registry, candidate['digest'], pull_progress.machine_arch(), _local_layers())
+    return plan
+
+
 def fetch_latest():
     base = FEED.format(channel=baseline()['channel'] or 'stable').rstrip('/')
     manifest_bytes = _fetch(base + '/manifest.json')
@@ -299,6 +346,9 @@ def fetch_latest():
 def _app_view():
     cur = current()
     job = _read_json('job.json')
+    watch = _download
+    if job and job.get('state') == 'downloading' and watch:
+        job = dict(job, **watch.snapshot())   # total and bytes, once known
     return {
         'auto_install_supported': True,
         'current_digest': cur.get('digest', ''),
@@ -416,7 +466,15 @@ def _run(candidate, job, lease):
     try:
         before = current()
         ref = f'{REGISTRY}/{candidate["source"]}@{candidate["digest"]}'
-        r = subprocess.run([PODMAN, 'pull', '--quiet', ref], capture_output=True, text=True, timeout=PULL_TIMEOUT_S)
+        global _download
+        watch = pull_progress.Progress(_download_plan(candidate), log=log)
+        _download = watch
+        watch.start()
+        try:
+            r = subprocess.run([PODMAN, 'pull', '--quiet', ref], capture_output=True, text=True, timeout=PULL_TIMEOUT_S)
+        finally:
+            watch.stop()
+            _download = None
         if r.returncode != 0:
             raise UpdateError('Could not download the update: ' + (r.stderr.strip().splitlines() or ['podman pull failed'])[-1][:200])
         try:

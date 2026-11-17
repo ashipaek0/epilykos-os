@@ -47,6 +47,7 @@ test:
 	$(PYTHON) tools/test_shared_maintenance.py
 	$(PYTHON) tools/test_app_compatibility.py
 	$(PYTHON) tools/test_app_update.py
+	$(PYTHON) tools/test_pull_progress.py
 	$(PYTHON) tools/test_os_version.py
 	$(PYTHON) tools/test_system_state.py
 	$(PYTHON) tools/test_netinfo.py

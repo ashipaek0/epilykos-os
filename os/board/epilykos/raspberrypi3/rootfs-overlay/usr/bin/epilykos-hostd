@@ -29,7 +29,8 @@ directory. One JSON request per line, one JSON reply per line:
     {"action": "bluetooth_recover", "reason": "in_progress"}   restart a stuck BlueZ
                                                 (or "no_adapter": reload the chip's driver when the
                                                 kernel has no adapter); at most once per 10 min
-    {"action": "update_status"}                 installing? how did the last update end?
+    {"action": "update_status"}                 installing? how did the last update end? (while
+                                                downloading: the job also has total and bytes)
     {"action": "update_check"}                  is a newer signed app release out?
     {"action": "update_apply", "target": "app"} install it (replies at once, then works)
     {"action": "os_status"}                     protocol-2 OS updates: state and job

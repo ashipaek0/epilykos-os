@@ -484,6 +484,7 @@ sequence: integer >= 1, monotonically increasing across promoted releases
 **Implementation status**
 
 - epilykos_update (used by epilykos-hostd): pulls the signed candidate by digest, starts it through active.env on DATA, promotes it only when epilykos.service reports healthy (current/previous/floor on /data/epilykos/updater), otherwise restores the previous image; the boot slot is never touched. An update cut short is rolled back at the next hostd start. epilykos-run starts active.env only when its sequence is at least the slot's preloaded one. tools/test_app_update.py.
+- Download progress: while the candidate downloads, the update_status job carries total and bytes so Settings can show a bar. podman pull --quiet reports nothing, so hostd works them out beside it: total is the image's layers for this board from the registry (by digest) minus the leading layers the box already has, bytes is what the network has received since the pull began. Best effort and in memory only; when either is unknown the job has no numbers and the update is unaffected. tools/test_pull_progress.py.
 
 **Required evidence**
 

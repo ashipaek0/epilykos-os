@@ -94,7 +94,9 @@ for f in ('podman', 'systemctl'):
 
 os.environ.update(EPILYKOS_MAINTENANCE_LOCK=str(T / 'maintenance.lock'), EPILYKOS_UPDATE_DIR=str(state), EPILYKOS_IMAGE_ENV=str(T / 'image.env'),
                   EPILYKOS_APP_PUBKEY=str(T / 'missing.pub'), EPILYKOS_UPDATE_URL=f'file://{feed}',
-                  EPILYKOS_PODMAN=str(T / 'podman'), EPILYKOS_SYSTEMCTL=str(T / 'systemctl'))
+                  EPILYKOS_PODMAN=str(T / 'podman'), EPILYKOS_SYSTEMCTL=str(T / 'systemctl'),
+                  # The download estimate asks the registry; here nothing answers, so it gives up at once.
+                  EPILYKOS_REGISTRY_URL='http://127.0.0.1:9', EPILYKOS_NET_DEV=str(T / 'net-dev'))
 sys.path.insert(0, str(PYLIB))
 import epilykos_update as up  # noqa: E402
 
